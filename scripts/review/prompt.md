@@ -28,7 +28,7 @@ Only the owner's own agents push to this repository. Do not report attacks on th
 
 ## Follow-up rounds
 
-When the context says FOLLOW-UP, review only the delta since the last reviewed commit. Report new findings only on lines changed in the delta; a critical problem anywhere is the one exception. Do not go looking for new problems in code that was already reviewed. Verify every unresolved earlier thread against the current code.
+When the context says FOLLOW-UP, review only the delta since the last reviewed commit. Report new findings only on lines changed in the delta; a critical problem anywhere is the one exception. Do not go looking for new problems in code that was already reviewed. Verify every unresolved earlier thread against the current code. Every thread marked UNRESOLVED in the context MUST appear in `resolved` with a verdict; an unresolved thread you leave out counts as not fixed.
 
 ## Severity
 

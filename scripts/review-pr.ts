@@ -31,6 +31,8 @@ import { rerunFailedGates } from "./review/rerun.ts";
 import {
   buildReviewPayload,
   dedupeFindings,
+  missingVerdicts,
+  noVerdictNote,
   finalizeReview,
   planThreadActions,
   reviewGate,
@@ -38,7 +40,7 @@ import {
 } from "./review/policy.ts";
 import {
   decodeReview,
-  findSecretLeak,
+  findOutgoingLeak,
   inlineCommentBody,
   type Marker,
   parseMarker,
@@ -659,7 +661,9 @@ async function main() {
     const verdicts = (rawReview.resolved ?? []).filter((verdict) =>
       openThreads.has(verdict.threadId),
     );
-    const notFixed = verdicts.filter((verdict) => verdict.verdict === "not_fixed").length;
+    const unanswered = missingVerdicts(threadInfos, verdicts);
+    const notFixed =
+      verdicts.filter((verdict) => verdict.verdict === "not_fixed").length + unanswered.length;
     const deltaLines = delta === undefined ? undefined : commentableLines(delta);
     const review = finalizeReview(
       rawReview,
@@ -667,14 +671,23 @@ async function main() {
       notFixed,
     );
     const { inline, outside } = splitFindings(review.findings, commentableLines(diff));
-    const threadNotes = verdicts.map((verdict) => {
-      const thread = openThreads.get(verdict.threadId);
-      return `- \`${thread?.path}:${thread?.line ?? "outdated"}\` ${verdict.verdict === "fixed" ? "fixed" : "not fixed"}: ${verdict.note}`;
-    });
+    const threadNotes = [
+      ...verdicts.map((verdict) => {
+        const thread = openThreads.get(verdict.threadId);
+        return `- \`${thread?.path}:${thread?.line ?? "outdated"}\` ${verdict.verdict === "fixed" ? "fixed" : "not fixed"}: ${verdict.note}`;
+      }),
+      ...unanswered.map(noVerdictNote),
+    ];
     const body = renderBody({ review, sha: data.sha, outside, threadNotes, notFixed });
     const secrets = localSecrets(mainClone);
-    const outgoing = JSON.stringify([body, ...inline.map(inlineCommentBody)]);
-    if (findSecretLeak(outgoing, secrets)) {
+    const actions = planThreadActions(verdicts, threadInfos);
+    const outgoing = [
+      body,
+      ...inline.map(inlineCommentBody),
+      ...threadNotes,
+      ...actions.replies.map((reply) => reply.body),
+    ];
+    if (findOutgoingLeak(outgoing, secrets)) {
       throw new Error("the review contains a local secret value; nothing was posted");
     }
     const payload = buildReviewPayload(data.sha, body, inline);
@@ -700,7 +713,6 @@ async function main() {
       return [];
     });
     if (rerun.length > 0) console.error(`re-ran review-gate runs: ${rerun.join(", ")}`);
-    const actions = planThreadActions(verdicts, threadInfos);
     for (const reply of actions.replies) {
       await sh([
         "gh",

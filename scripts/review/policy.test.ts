@@ -4,6 +4,8 @@ import {
   clampConfidence,
   dedupeFindings,
   finalizeReview,
+  missingVerdicts,
+  noVerdictNote,
   planThreadActions,
   reviewGate,
   scopeFindings,
@@ -161,4 +163,24 @@ test("unfixed earlier threads count as actionable in the marker", () => {
     notFixed: 2,
   });
   expect(parseMarker(body)?.actionable).toBe(2);
+});
+
+test("open threads without a verdict are reported, resolved ones are not", () => {
+  const thread = (id: string, isResolved: boolean): ThreadInfo => ({
+    id,
+    isResolved,
+    path: "a.ts",
+    line: null,
+    firstCommentId: 1,
+    text: "t",
+  });
+  const threads = [thread("T1", false), thread("T2", false), thread("T3", true)];
+  const verdicts = [{ threadId: "T1", verdict: "fixed" as const, note: "ok" }];
+  expect(missingVerdicts(threads, verdicts).map((t) => t.id)).toEqual(["T2"]);
+  expect(missingVerdicts(threads, [])).toHaveLength(2);
+  expect(missingVerdicts([], [])).toEqual([]);
+  expect(missingVerdicts([thread("T1", false)], verdicts)).toEqual([]);
+  expect(noVerdictNote(thread("T2", false))).toContain("`a.ts:outdated` no verdict");
+  expect(clampConfidence(5, [], missingVerdicts(threads, verdicts).length)).toBe(3);
+  expect(clampConfidence(5, [], 0)).toBe(5);
 });

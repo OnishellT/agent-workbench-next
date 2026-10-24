@@ -99,6 +99,20 @@ export function finalizeReview(
   };
 }
 
+// Every open earlier thread needs a verdict: an open thread the reviewer left out counts as
+// not fixed instead of passing as fixed.
+export function missingVerdicts(
+  threads: readonly ThreadInfo[],
+  verdicts: readonly Resolution[],
+): ThreadInfo[] {
+  const answered = new Set(verdicts.map((verdict) => verdict.threadId));
+  return threads.filter((thread) => !thread.isResolved && !answered.has(thread.id));
+}
+
+export function noVerdictNote(thread: ThreadInfo): string {
+  return `- \`${thread.path}:${thread.line ?? "outdated"}\` no verdict: the reviewer did not judge this open thread, so it counts as not fixed.`;
+}
+
 export const maxLocalRounds = 3;
 
 export type Gate = { action: "run" } | { action: "skip" | "stop"; message: string };

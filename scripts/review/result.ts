@@ -120,10 +120,29 @@ export function findNeutralityViolation(text: string): string | undefined {
   return forbiddenWord.exec(prose)?.[0] ?? forbiddenPhrase.exec(prose)?.[0];
 }
 
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+// A secret leaks when the text holds its value, its whitespace-normalised value, or (for a
+// multi-line value such as a private key) any single line of it. Values and lines shorter
+// than 8 characters are ignored.
+function leaksSecret(text: string, secret: string): boolean {
+  const flat = squash(text);
+  const candidates = [secret, ...secret.split(/\r?\n/)]
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 8);
+  return candidates.some((part) => text.includes(part) || flat.includes(squash(part)));
+}
+
 // The reviewer reads untrusted text and can read local files, so nothing that contains one of
 // the owner's secrets is ever posted.
 export function findSecretLeak(text: string, secrets: readonly string[]): boolean {
-  return secrets.some((secret) => secret.length >= 8 && text.includes(secret));
+  return secrets.some((secret) => leaksSecret(text, secret));
+}
+
+// Checks the raw strings that will be posted (never a JSON-encoded blob, whose escaping hides
+// quotes, backslashes and newlines): each one alone and all of them joined.
+export function findOutgoingLeak(texts: readonly string[], secrets: readonly string[]): boolean {
+  return [...texts, texts.join("\n")].some((text) => findSecretLeak(text, secrets));
 }
 
 // Removes every occurrence of a literal token.

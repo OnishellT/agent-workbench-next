@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   actionableCount,
+  findOutgoingLeak,
   findSecretLeak,
   buildMarker,
   decodeReview,
@@ -172,4 +173,30 @@ test("a marker forged through nested comments is not accepted from the model's J
   const decoded = decodeReview(answer);
   expect(decoded.ok).toBe(true);
   if (decoded.ok) expect(parseMarker(decoded.review.summary)).toBeUndefined();
+});
+
+const pem = "-----BEGIN KEY-----\nabcDEF123456ghiJKL\nmnoPQR789012stuVWX\n-----END KEY-----";
+
+test("finds plain and escape-prone secrets in the raw posted text", () => {
+  for (const secret of ["sk-plain-secret-1", 'pa"ss"word-12345', "back\\slash\\secret1", pem]) {
+    expect(findOutgoingLeak([`text ${secret} text`], [secret])).toBe(true);
+  }
+  // the old check searched a JSON-encoded blob, which hides quotes, backslashes and newlines
+  const quoted = 'pa"ss"word-12345';
+  expect(JSON.stringify([`x ${quoted}`]).includes(quoted)).toBe(false);
+  expect(JSON.stringify([`x ${pem}`]).includes(pem)).toBe(false);
+});
+
+test("finds a multi-line secret by line, with changed whitespace, or split across comments", () => {
+  expect(findOutgoingLeak(["see abcDEF123456ghiJKL here"], [pem])).toBe(true);
+  expect(findOutgoingLeak(["a abcDEF123456ghiJKL  mnoPQR789012stuVWX"], [pem])).toBe(true);
+  expect(findOutgoingLeak(["first", "mnoPQR789012stuVWX", "last"], [pem])).toBe(true);
+  expect(findOutgoingLeak(["pa", "ss-split-secret"], ["pa\nss-split-secret"])).toBe(true);
+});
+
+test("a clean review is not flagged", () => {
+  const clean = ["## Local review", "Looks fine.", 'say "hi" \\ ok'];
+  expect(findOutgoingLeak(clean, [pem, 'pa"ss-12345', "short"])).toBe(false);
+  expect(findOutgoingLeak(["x"], [])).toBe(false);
+  expect(findOutgoingLeak(["a short x"], ["x", "abc\ndef"])).toBe(false);
 });
