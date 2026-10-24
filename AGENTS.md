@@ -16,7 +16,8 @@ widen only to resolve a concrete doubt.
 - Toolchain comes from the Nix flake: `nix develop` or direnv (`.envrc`,
   `use flake`). The pin is the same nixpkgs as `~/nix-config` (go 1.26.8, bun 1.4.2).
 - Release and CI builds use the latest Go 1.26 patch (`go.mod` only sets the minimum, 1.26.8): the
-  stdlib advisories fixed in 1.26.9/1.26.10 (`govulncheck` in CI) are not in the pinned dev shell yet.
+  stdlib advisories fixed in 1.26.9/1.26.10 (`govulncheck` in CI) are not in the pinned dev shell yet
+  (recorded in `docs/adr/0006-nix-flake-dev-shell.md`, amendment 2026-10-24).
   Bump the flake pin when nixpkgs ships a patched Go.
 - `third_party/magpie` is a separate Go module; `third_party/sim` has its own
   bun workspace and Dockerfiles. Pins and licences: `NOTICE.md`, `third_party/magpie/WORKBENCH.md`.

@@ -49,9 +49,11 @@ jobs:
           ignore=$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/review.json?ref=$(jq -r .base.sha <<<"$pr")" 2>/dev/null \
             | jq -R -s 'try (fromjson | .ignorePatterns // "") catch "" | split("\n") | map(select(length > 0))') || ignore='[]'
           # The gate understands literals, `*` and `**` only (the reviewer's Bun.Glob also reads
-          # `?`, `[...]` and `{a,b}`): reject the rest instead of letting the two disagree.
-          if jq -e 'any(.[]; test("[?\\[\\]{}]"))' <<<"$ignore" >/dev/null; then
-            echo "::error::.github/review.json ignorePatterns may only use literals, * and ** (found ?, [], or {})."
+          # `?`, `[...]`, `{a,b}`, a leading `!` as negation, `\` escapes and `(...)` extglobs):
+          # reject the rest instead of letting the two disagree. Same set as parseIgnorePatterns
+          # in scripts/review/context.ts. An invalid config fails the gate (a review is required).
+          if jq -e 'any(.[]; test("[?\\[\\]{}!\\\\()]"))' <<<"$ignore" >/dev/null; then
+            echo "::error::.github/review.json ignorePatterns may only use literals, * and ** (found one of ? [ ] { } ! \\ ( ))."
             exit 1
           fi
           other=$(api "pulls/$PR/files" | jq --argjson ignore "$ignore" '

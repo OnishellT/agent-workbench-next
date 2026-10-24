@@ -124,7 +124,8 @@ describe("review gate", () => {
   });
 
   test("rejects ignore globs beyond literals, * and ** instead of reading them as literals", () => {
-    for (const ignorePatterns of ["docs/a?.png", "docs/[ab].png", "docs/*.{png,svg}"]) {
+    // Keep identical to the list in scripts/review/context.test.ts.
+    for (const ignorePatterns of ["a?.ts", "src/[ab].ts", "src/*.{ts,js}", "!web/bun.lock", "docs/!(a).png", "docs/a\\b.png", "docs/@(a|b).png", "docs/(a).png"]) {
       const result = run({ ignorePatterns, files: [{ filename: "docs/ab.png" }] });
       expect(result.ok).toBe(false);
       expect(result.output).toContain("may only use literals");

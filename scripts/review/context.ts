@@ -30,13 +30,15 @@ export function parseApplyTo(content: string): string[] {
 
 // `ignorePatterns` of .github/review.json is a newline-separated glob list. Only literals, `*` and
 // `**` are allowed: the review-gate workflow implements that subset, and a richer glob would let
-// the reviewer skip a PR that the gate still blocks.
+// the reviewer skip a PR that the gate still blocks. Rejected: `? [ ] { } ! \ ( )` (Bun.Glob reads a
+// leading `!` as negation, `\` as an escape and `(...)` as extglob; the gate reads them literally).
+// Keep the character class in sync with .github/workflows/review-gate.yml.
 export function parseIgnorePatterns(ignorePatterns: string): string[] {
   const globs = ignorePatterns
     .split("\n")
     .map((glob) => glob.trim())
     .filter((glob) => glob.length > 0);
-  const unsupported = globs.find((glob) => /[?[\]{}]/.test(glob));
+  const unsupported = globs.find((glob) => /[?[\]{}!\\()]/.test(glob));
   if (unsupported !== undefined) {
     throw new Error(`ignorePatterns supports only literals, * and **: ${unsupported}`);
   }
@@ -92,6 +94,19 @@ export function docsFor(changedPaths: string[], docs: ScopedDoc[]): string[] {
 // drift can be checked).
 export function unignoredPaths(paths: string[], ignorePatterns: string[]): string[] {
   return paths.filter((path) => !matchesAny(path, ignorePatterns));
+}
+
+// Files that go into the review diff. Same rule as the gate: a rename counts when EITHER its
+// post-image or its previous path is not ignored (so internal/a.go -> docs/assets/a.png stays).
+export function unignoredFiles<T extends { path: string; previousPath?: string }>(
+  files: T[],
+  ignorePatterns: string[],
+): T[] {
+  return files.filter(
+    (file) =>
+      !matchesAny(file.path, ignorePatterns) ||
+      (file.previousPath !== undefined && !matchesAny(file.previousPath, ignorePatterns)),
+  );
 }
 
 // Paths that make a review necessary: not ignored and not Markdown.

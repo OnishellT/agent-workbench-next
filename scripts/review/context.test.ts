@@ -6,6 +6,7 @@ import {
   parseApplyTo,
   parseIgnorePatterns,
   reviewablePaths,
+  unignoredFiles,
   unignoredPaths,
   skillsFor,
 } from "./context.ts";
@@ -65,8 +66,26 @@ test("finds linked issues in the PR body", () => {
 });
 
 test("ignorePatterns rejects globs the review gate does not implement", () => {
-  for (const glob of ["a?.ts", "src/[ab].ts", "src/*.{ts,js}"]) {
+  // Keep identical to the list in scripts/review-gate.test.ts.
+  for (const glob of ["a?.ts", "src/[ab].ts", "src/*.{ts,js}", "!web/bun.lock", "docs/!(a).png", "docs/a\\b.png", "docs/@(a|b).png", "docs/(a).png"]) {
     expect(() => parseIgnorePatterns(`web/bun.lock\n${glob}`)).toThrow("only literals");
   }
   expect(parseIgnorePatterns("**/*.png\nthird_party/**")).toEqual(["**/*.png", "third_party/**"]);
+});
+
+test("a rename stays in the review when either of its paths is not ignored", () => {
+  const ignore = parseIgnorePatterns("docs/assets/**\nweb/bun.lock");
+  const files = [
+    { path: "docs/assets/a.png", previousPath: "internal/a.go" },
+    { path: "internal/b.go", previousPath: "docs/assets/b.png" },
+    { path: "docs/assets/c.png", previousPath: "docs/assets/d.png" },
+    { path: "docs/assets/e.png" },
+    { path: "internal/f.go" },
+    { path: "web/bun.lock" },
+  ];
+  expect(unignoredFiles(files, ignore).map((file) => file.path)).toEqual([
+    "docs/assets/a.png",
+    "internal/b.go",
+    "internal/f.go",
+  ]);
 });

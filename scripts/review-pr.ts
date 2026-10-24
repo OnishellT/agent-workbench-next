@@ -22,7 +22,7 @@ import {
   parseApplyTo,
   parseIgnorePatterns,
   reviewablePaths,
-  unignoredPaths,
+  unignoredFiles,
   skillsFor,
 } from "./review/context.ts";
 import { commentableLines, splitDiffByFile } from "./review/diff.ts";
@@ -606,8 +606,8 @@ async function main() {
     // Changed paths come from the diff: `gh pr view --json files` stops at 100 entries.
     const fullDiff = await sh(["gh", "pr", "diff", String(pr), "-R", data.repo]);
     const files = splitDiffByFile(fullDiff);
-    const changed = files.map((file) => file.path);
-    const paths = unignoredPaths(changed, ignore);
+    const kept = unignoredFiles(files, ignore);
+    const paths = kept.map((file) => file.path);
     // Like the review-gate workflow, a rename counts both of its paths: moving a file out of
     // Markdown or into an ignored path still needs a review (and the marker that clears the gate).
     const gated = files.flatMap((file) => [file.path, ...(file.previousPath ? [file.previousPath] : [])]);
@@ -615,7 +615,6 @@ async function main() {
       console.log(`PR #${pr} changes only Markdown or ignored files: no review needed.`);
       return;
     }
-    const kept = splitDiffByFile(fullDiff).filter((file) => paths.includes(file.path));
     const diff = kept.map((file) => file.text).join("");
     const commits = await sh(["git", "log", "--format=%h %s", `origin/${data.base}..${data.sha}`], {
       cwd: worktree,
@@ -630,8 +629,7 @@ async function main() {
         const deltaDiff = await sh(["git", "diff", `${lastReviewed}..${data.sha}`], {
           cwd: worktree,
         });
-        delta = splitDiffByFile(deltaDiff)
-          .filter((file) => paths.includes(file.path))
+        delta = unignoredFiles(splitDiffByFile(deltaDiff), ignore)
           .map((file) => file.text)
           .join("");
       }
