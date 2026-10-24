@@ -44,6 +44,7 @@ import {
   parseMarker,
   renderBody,
   splitFindings,
+  stripHtmlComments,
   type Review,
 } from "./review/result.ts";
 
@@ -341,7 +342,7 @@ function buildContext(
     sections.push(
       fenced(
         "Earlier local reviews of this pull request",
-        data.earlierReviews.join("\n\n---\n\n").replace(/<!--[\s\S]*?-->/g, ""),
+        stripHtmlComments(data.earlierReviews.join("\n\n---\n\n")),
       ),
     );
   }

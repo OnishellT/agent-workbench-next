@@ -126,6 +126,18 @@ export function findSecretLeak(text: string, secrets: readonly string[]): boolea
   return secrets.some((secret) => secret.length >= 8 && text.includes(secret));
 }
 
+// Removes HTML comments, then any delimiter left over, until nothing changes. A single pass can
+// rebuild a comment from its own remains (`<<!---->!-- ... -->`), and a rebuilt review marker must
+// never reach the posted text or the model's context.
+export function stripHtmlComments(text: string): string {
+  let current = text;
+  for (;;) {
+    const next = current.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--/g, "").replace(/-->/g, "");
+    if (next === current) return next;
+    current = next;
+  }
+}
+
 export function decodeReview(answer: string): Decoded {
   const json = extractJson(answer);
   if (json === undefined) return { ok: false, error: "No fenced JSON block found in the answer." };
@@ -133,7 +145,7 @@ export function decodeReview(answer: string): Decoded {
   try {
     // HTML comments are dropped so that a marker echoed by the model is never mistaken for the real one.
     // A null property is read as an absent one: the model often writes `"suggestion": null`.
-    value = JSON.parse(json.replace(/<!--[\s\S]*?-->/g, ""), (_key, field: unknown) =>
+    value = JSON.parse(stripHtmlComments(json), (_key, field: unknown) =>
       field === null ? undefined : field,
     );
   } catch (cause) {

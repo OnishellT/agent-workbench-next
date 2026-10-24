@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26" # latest patch: go.mod only sets the minimum, the toolchain must carry the stdlib fixes
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
@@ -83,6 +83,9 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags nogui ./cmd/... ./internal/... ./web/...
       - name: Tests
         run: go test -tags nogui -count=1 ./cmd/... ./internal/... ./web/...
+      # Magpie is a separate module: the guard lists its packages, which needs its modules locally.
+      - name: Download Magpie modules
+        run: cd third_party/magpie && go mod download
       - name: Docker packaging guard
         run: python3 scripts/check_docker_web_output.py
       - name: Release binaries
