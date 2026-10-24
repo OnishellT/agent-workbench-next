@@ -1,0 +1,89 @@
+name: Review gate
+
+# Enforces the review gate of CONTRIBUTING.md#review-gate as a required check. It reads only
+# API data (the PR, its files and its reviews) and never checks out or runs PR code. The token
+# is the default GITHUB_TOKEN with read permissions. Runs before the local review fail and stay
+# as failed check runs on the head, so `make review` re-runs them after it posts (a re-run
+# re-reads the live PR state); there is deliberately no pull_request_review trigger.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# No concurrency group: every run re-reads the live PR state, and the reviewer re-runs several
+# failed runs of one head at once, which a shared cancel-in-progress group would cancel.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review-gate:
+    name: review-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      # Accounts whose local review counts (space separated): the owner who runs `make review`.
+      REVIEWERS: OnishellT
+    steps:
+      - name: Evaluate the review gate
+        run: |
+          set -euo pipefail
+          # api <path>: every page of a list endpoint as one JSON array.
+          api() { gh api --paginate "repos/$REPO/$1" | jq -s 'add // []'; }
+
+          pr=$(gh api "repos/$REPO/pulls/$PR")
+          head=$(jq -r .head.sha <<<"$pr")
+
+          if [ "$(jq -r .draft <<<"$pr")" = "true" ]; then
+            echo "::error::PR #$PR is a draft. Mark it ready (gh pr ready $PR), then run: make review PR=$PR"
+            exit 1
+          fi
+
+          # Same skip rule as `make review`: Markdown and the base branch's .github/review.json
+          # ignorePatterns need no review (the reviewer posts nothing for them, so a marker
+          # could never exist). A rename counts both paths, so moving a file out of
+          # Markdown is not exempt.
+          ignore=$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/review.json?ref=$(jq -r .base.sha <<<"$pr")" 2>/dev/null \
+            | jq -R -s 'try (fromjson | .ignorePatterns // "") catch "" | split("\n") | map(select(length > 0))') || ignore='[]'
+          # The gate understands literals, `*` and `**` only (the reviewer's Bun.Glob also reads
+          # `?`, `[...]`, `{a,b}`, a leading `!` as negation, `\` escapes and `(...)` extglobs):
+          # reject the rest instead of letting the two disagree. Same set as parseIgnorePatterns
+          # in scripts/review/context.ts. An invalid config fails the gate (a review is required).
+          if jq -e 'any(.[]; test("[?\\[\\]{}!\\\\()]"))' <<<"$ignore" >/dev/null; then
+            echo "::error::.github/review.json ignorePatterns may only use literals, * and ** (found one of ? [ ] { } ! \\ ( ))."
+            exit 1
+          fi
+          other=$(api "pulls/$PR/files" | jq --argjson ignore "$ignore" '
+            def rx: gsub("(?<c>[.+?()\\[\\]{}|^$])"; "\\\(.c)")
+              | gsub("\\*\\*/"; "\u0001") | gsub("\\*\\*"; "\u0002") | gsub("\\*"; "\u0003")
+              | gsub("\u0001"; "(.*/)?") | gsub("\u0002"; ".*") | gsub("\u0003"; "[^/]*") | "^" + . + "$";
+            [.[] | .filename, (.previous_filename // empty)
+             | select((endswith(".md") | not) and (. as $path | any($ignore[]; . as $glob | $path | test($glob | rx)) | not))]
+            | length')
+          if [ "$other" -eq 0 ]; then
+            echo "Only Markdown or ignored files changed: no review required."
+            exit 0
+          fi
+
+          # Newest review by an allowed account whose last marker names the head commit.
+          marker=$(api "pulls/$PR/reviews" | jq -r --arg head "$head" --arg users "$REVIEWERS" '
+            [.[] | select(.user.login as $u | ($users | split(" ")) | index($u))
+             | {t: .submitted_at, m: ([.body // "" | scan("<!-- local-review sha=([0-9a-f]{7,40}) confidence=([1-5]) actionable=([0-9]+) -->")] | last)}
+             | select(.m != null and (.m[0] as $sha | $head | startswith($sha)))]
+            | sort_by(.t) | last | if . == null then "" else "\(.m[1]) \(.m[2])" end')
+
+          fix="Run from an up-to-date main checkout: make review PR=$PR"
+          if [ -z "$marker" ]; then
+            echo "::error::No local review of head ${head:0:7} yet. $fix"
+            exit 1
+          fi
+          confidence=${marker% *}
+          actionable=${marker#* }
+          if [ "$confidence" -lt 4 ] || [ "$actionable" -ne 0 ]; then
+            echo "::error::The local review of head ${head:0:7} has confidence $confidence/5 and $actionable actionable findings (needs 4 or 5 and 0). Fix the findings, push once, then: make review PR=$PR"
+            exit 1
+          fi
+          echo "Local review of head ${head:0:7}: confidence $confidence/5, no actionable findings."

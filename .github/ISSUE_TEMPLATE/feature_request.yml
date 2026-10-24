@@ -1,0 +1,14 @@
+name: Feature request
+description: Propose a change to scope (see plan.md for what is in scope)
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal

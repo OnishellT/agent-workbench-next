@@ -1,0 +1,33 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From the footer of the dashboard or `workbench --version`.
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it runs
+      options: [Docker image, Binary on a server, Local development]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact tokens and host names. Foundry's log is `<state-dir>/foundry-loop/data/service.log`.
+      render: text

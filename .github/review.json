@@ -1,0 +1,13 @@
+{
+  "ignorePatterns": "web/bun.lock\nthird_party/foundry/ui/bun.lock\nadapters/pi/bun.lock\nGO-NOTICES.txt\nweb/public/NOTICES.txt\nthird_party/foundry/foundry_loop/web/**\nthird_party/sim/**\nthird_party/magpie/**\n**/*.png\n**/*.svg",
+  "instructions": "Review against AGENTS.md (the hard rules) and CONTRIBUTING.md, and the domain skills under .pi/skills. Treat as blocking: credentials in code, logs or prompts; a bypass of the session, Origin or SSH host-identity checks; per-host isolation weakened; browser-reachable arbitrary shell; capture beyond enabled sources; Foundry human decisions made by automation; a retired feature (Work, built-in terminal, usage overview) coming back; an edited SQLite migration instead of a new one. Prefer the least code that is obviously correct; flag duplicated logic where an existing helper fits. Do not comment on formatting (gofmt and the TypeScript compiler enforce it). Vendored code under third_party is reviewed only where the diff touches the integration patches.",
+  "customContext": {
+    "files": [
+      { "path": "plan.md", "description": "Scope, work split and acceptance (the only source of scope)" },
+      { "path": "docs/adr/0008-foundry-replaces-learnings.md", "description": "Why Foundry replaces Learnings and what stays dormant", "scope": ["internal/foundry/**", "internal/foundryloop/**", "third_party/foundry/**", "web/src/modules/foundry/**", "web/src/modules/conversations/**"] },
+      { "path": "docs/adr/0005-per-host-native-sites.md", "description": "Dedicated origins per host for the native Magpie panels", "scope": ["internal/app/**", "internal/hosts/**", "cmd/**"] },
+      { "path": "docs/adr/0007-vps-topology-loopback-proxy-and-sessions.md", "description": "Loopback listener, trusted proxy and sessions", "scope": ["internal/app/**", "internal/config/**", "deploy/**", "compose.yaml"] },
+      { "path": "docs/operations.md", "description": "Deployment, state and Foundry operation", "scope": ["Dockerfile", "compose.yaml", "deploy/**", "scripts/backup.sh", "internal/foundryloop/**"] }
+    ]
+  }
+}

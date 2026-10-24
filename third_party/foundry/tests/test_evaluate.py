@@ -79,7 +79,7 @@ class ReplayTests(unittest.TestCase):
         self.prepare(); job=self.store.job('evaluate','candidate'); self.store.execute("UPDATE jobs SET status='cancelled' WHERE id=?",(job,))
         report=evaluate_candidate(self.store,'candidate',job); self.assertEqual(report['status'],'cancelled'); self.assertEqual(report['calls'],0)
     def test_snapshot_failure_before_run_finalizes_experiment(self):
-        cases=self.prepare(); original=case_paths; count=[0]
+        self.prepare(); original=case_paths; count=[0]
         def changed(store,case):
             count[0]+=1
             if count[0]>2: raise Invalid('La integridad del snapshot cambió')

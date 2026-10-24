@@ -1,0 +1,8 @@
+# Vendored upstream applications are analysed by their own projects; this repository's
+# code is what the scan is for.
+name: agent-workbench CodeQL
+paths-ignore:
+  - third_party/sim
+  - third_party/magpie
+  - "**/node_modules"
+  - web/dist

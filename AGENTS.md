@@ -15,6 +15,10 @@ widen only to resolve a concrete doubt.
   via `web/embed.go` (needs `web/dist`; a checked-in build exists).
 - Toolchain comes from the Nix flake: `nix develop` or direnv (`.envrc`,
   `use flake`). The pin is the same nixpkgs as `~/nix-config` (go 1.26.8, bun 1.4.2).
+- Release and CI builds use the latest Go 1.26 patch (`go.mod` only sets the minimum, 1.26.8): the
+  stdlib advisories fixed in 1.26.9/1.26.10 (`govulncheck` in CI) are not in the pinned dev shell yet
+  (recorded in `docs/adr/0006-nix-flake-dev-shell.md`, amendment 2026-10-24).
+  Bump the flake pin when nixpkgs ships a patched Go.
 - `third_party/magpie` is a separate Go module; `third_party/sim` has its own
   bun workspace and Dockerfiles. Pins and licences: `NOTICE.md`, `third_party/magpie/WORKBENCH.md`.
 
@@ -99,6 +103,16 @@ Agent configuration (Magpie), Connections (incl. devices), Settings.
   scheduler, microservices, DI/ORM frameworks, an updater, or another usage
   tracker (usage belongs to Magpie).
 - NEVER replace pending acceptance items with mocks, 501, skips or screenshots.
+
+## CI and review
+
+- Pull requests run `.github/workflows/ci.yml` (required check `ci-ok`) and `security.yml`
+  (`security-ok`); `make check` is a subset (gofmt, vet, staticcheck, Go/web/Foundry tests, typecheck, packaging guard; not the tooling tests, image smoke test or browser specs). `main` is protected (`.github/rulesets/main.json`).
+- Merging needs the local reviewer: `make review PR=<n>` (pi, read-only, confidence 1-5) on the final
+  commit with confidence 4 or 5 and no actionable findings; `review-gate` enforces it. The reviewer's
+  rules are read from the base branch (`.github/review.json`, `.github/copilot-instructions.md`,
+  `.github/instructions/`, `scripts/review/`). After three rounds without convergence, stop and ask.
+- Keep the committed Foundry UI bundle in sync (`make foundry-ui`); CI fails on a stale one.
 
 ## Skills and decisions
 
