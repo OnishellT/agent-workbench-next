@@ -694,10 +694,12 @@ async function main() {
       rawReview,
       dedupeFindings(scopeFindings(rawReview.findings, deltaLines), [...threadInfos, ...carriedInfos]),
       notFixed,
+      carriedJudgement.remaining.map((item) => item.finding),
     );
     const split = splitFindings(review.findings, commentableLines(diff));
     const { inline } = split;
-    const outside = [...carriedJudgement.remaining.map((item) => item.finding), ...split.outside];
+    const carriedOpen = carriedJudgement.remaining.map((item) => item.finding);
+    const outside = [...carriedOpen, ...split.outside];
     const threadNotes = [
       ...verdicts.map((verdict) => {
         const thread = openThreads.get(verdict.threadId);
@@ -706,7 +708,7 @@ async function main() {
       ...unanswered.map(noVerdictNote),
       ...carriedJudgement.notes,
     ];
-    const body = renderBody({ review, sha: data.sha, outside, threadNotes, notFixed });
+    const body = renderBody({ review, sha: data.sha, outside, threadNotes, notFixed, carried: carriedOpen });
     const secrets = localSecrets(mainClone);
     const actions = planThreadActions(verdicts, threadInfos);
     const outgoing = [

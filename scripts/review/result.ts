@@ -282,11 +282,20 @@ export interface BodyInput {
   outside: readonly Finding[];
   threadNotes: readonly string[];
   notFixed?: number;
+  // Carried findings still open: counted in the severity table (they are not in review.findings).
+  carried?: readonly Finding[];
 }
 
-export function renderBody({ review, sha, outside, threadNotes, notFixed = 0 }: BodyInput): string {
+export function renderBody({
+  review,
+  sha,
+  outside,
+  threadNotes,
+  notFixed = 0,
+  carried = [],
+}: BodyInput): string {
   const counts = (severity: Severity) =>
-    review.findings.filter((finding) => finding.severity === severity).length;
+    [...review.findings, ...carried].filter((finding) => finding.severity === severity).length;
   const parts = [
     "## Local review",
     `**Confidence: ${review.confidence}/5** (${confidenceMeaning[review.confidence] ?? ""})`,

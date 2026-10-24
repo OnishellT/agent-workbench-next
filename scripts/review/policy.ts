@@ -92,11 +92,14 @@ export function finalizeReview(
   review: Review,
   findings: readonly Finding[],
   notFixed: number,
+  carried: readonly Finding[] = [],
 ): Review {
+  // Carried findings still open weigh like new ones of the same severity, but stay out of
+  // `review.findings`, which only holds what this round reports.
   return {
     ...review,
     findings,
-    confidence: clampConfidence(review.confidence, findings, notFixed),
+    confidence: clampConfidence(review.confidence, [...findings, ...carried], notFixed),
   };
 }
 

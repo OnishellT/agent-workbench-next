@@ -226,3 +226,81 @@ test("the carried section lists ids and is absent when nothing is carried", () =
   expect(renderCarried(carried)).toContain("id: outside:abcdef0:1");
   expect(renderCarried(carried)).toContain("UNRESOLVED");
 });
+
+// A follow-up round as review-pr.ts assembles it: the remaining carried findings are accounted
+// like new findings of the same severity (clamp and severity table), but never double counted.
+const followUp = (carriedList: typeof carried, verdicts: Parameters<typeof judgeCarried>[1], found: Finding[] = []) => {
+  const judged = judgeCarried(carriedList, verdicts);
+  const kept = judged.remaining.map((item) => item.finding);
+  const review = finalizeReview({ confidence: 5, summary: "S.", findings: found }, found, judged.notFixed, kept);
+  const body = renderBody({
+    review,
+    sha: "9999999",
+    outside: kept,
+    threadNotes: judged.notes,
+    notFixed: judged.notFixed,
+    carried: kept,
+  });
+  return { review, body };
+};
+
+const criticalCarried = [
+  { id: "outside:abcdef0:0", finding: finding({ path: "a.ts", line: 5, severity: "critical", title: "Crit" }) },
+];
+
+test("a carried critical that is not_fixed or unjudged caps confidence at 2 and fills the table", () => {
+  for (const verdicts of [[{ threadId: "outside:abcdef0:0", verdict: "not_fixed" as const, note: "still" }], []]) {
+    const { review, body } = followUp(criticalCarried, verdicts);
+    expect(review.confidence).toBeLessThanOrEqual(2);
+    expect(body).toContain("| critical | 1 |");
+    expect(parseMarker(body)).toEqual({ sha: "9999999", confidence: 2, actionable: 1 });
+  }
+});
+
+test("a carried major or minor caps at 3 and shows in its row; a carried nit shows but does not block", () => {
+  const { review, body } = followUp(carried, []);
+  expect(review.confidence).toBe(3);
+  expect(body).toContain("| major | 1 |");
+  expect(body).toContain("| minor | 1 |");
+  expect(body).toContain("| nit | 1 |");
+  expect(parseMarker(body)?.actionable).toBe(2);
+  const nitOnly = followUp([carried[2]!], []);
+  expect(nitOnly.review.confidence).toBe(4);
+  expect(parseMarker(nitOnly.body)?.actionable).toBe(0);
+});
+
+test("a carried finding judged fixed does not count", () => {
+  const { review, body } = followUp(criticalCarried, [
+    { threadId: "outside:abcdef0:0", verdict: "fixed", note: "gone" },
+  ]);
+  expect(review.confidence).toBe(5);
+  expect(body).toContain("| critical | 0 |");
+  expect(parseMarker(body)?.actionable).toBe(0);
+});
+
+test("a carried finding re-reported as new is counted once", () => {
+  const info = criticalCarried.map(({ id, finding: f }) => ({
+    id,
+    isResolved: false,
+    path: f.path,
+    line: f.line,
+    firstCommentId: 0,
+    text: `${f.title}\n${f.body}`,
+  }));
+  const reported = finding({ path: "a.ts", line: 5, severity: "critical", title: "Crit" });
+  const deduped = dedupeFindings([reported], info);
+  expect(deduped).toEqual([]);
+  const { body } = followUp(criticalCarried, [], deduped);
+  expect(body).toContain("| critical | 1 |");
+  expect(parseMarker(body)?.actionable).toBe(1);
+});
+
+test("without carried findings the output is byte-for-byte what it was", () => {
+  const found = [finding({ severity: "major" }), finding({ line: 11, severity: "nit" })];
+  const review = { confidence: 5, summary: "S.", findings: found };
+  expect(finalizeReview(review, found, 1, [])).toEqual(finalizeReview(review, found, 1));
+  const base = { review, sha: "9999999", outside: [], threadNotes: [], notFixed: 1 };
+  expect(renderBody({ ...base, carried: [] })).toBe(renderBody(base));
+  expect(renderBody(base)).toContain("| major | 1 |");
+  expect(parseMarker(renderBody(base))?.actionable).toBe(2);
+});
