@@ -66,6 +66,7 @@ the **base branch**, so a pull request cannot rewrite the reviewer that judges i
 worktree with a minimal environment, read-only tools and an empty home, and never posts anything containing a
 local secret. It needs `pi` signed in to the `opencode-go` provider; change the model with `REVIEW_MODEL`.
 After three rounds without converging it stops and asks for a human (`--force` overrides).
+Findings outside the diff, which have no thread, are carried from the latest review and judged by id every round until fixed.
 
 Before leaving draft, read your own diff against `.github/copilot-instructions.md`: the goal is a first review
 that finds nothing.

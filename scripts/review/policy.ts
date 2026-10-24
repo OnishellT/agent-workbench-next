@@ -2,6 +2,7 @@
 // when a run is skipped or stopped, and which thread actions follow the verdicts.
 import {
   inlineCommentBody,
+  type CarriedFinding,
   type Finding,
   type Marker,
   type Resolution,
@@ -111,6 +112,50 @@ export function missingVerdicts(
 
 export function noVerdictNote(thread: ThreadInfo): string {
   return `- \`${thread.path}:${thread.line ?? "outdated"}\` no verdict: the reviewer did not judge this open thread, so it counts as not fixed.`;
+}
+
+export interface CarriedJudgement {
+  remaining: CarriedFinding[];
+  notFixed: number;
+  notes: string[];
+}
+
+// Carried findings (outside the diff, no thread) follow the thread rule: `fixed` drops one,
+// `not_fixed` or no verdict keeps it, to be rendered again for the next round. A nit stays visible
+// but never counts as not fixed, because nits never block.
+export function judgeCarried(
+  carried: readonly CarriedFinding[],
+  verdicts: readonly Resolution[],
+): CarriedJudgement {
+  const byId = new Map(verdicts.map((verdict) => [verdict.threadId, verdict]));
+  const judgement: CarriedJudgement = { remaining: [], notFixed: 0, notes: [] };
+  for (const { id, finding } of carried) {
+    const verdict = byId.get(id);
+    const where = `\`${finding.path}:${finding.line}\``;
+    if (verdict?.verdict === "fixed") {
+      judgement.notes.push(`- ${where} fixed: ${verdict.note}`);
+      continue;
+    }
+    judgement.remaining.push({ id, finding });
+    if (finding.severity !== "nit") judgement.notFixed++;
+    judgement.notes.push(
+      verdict === undefined
+        ? `- ${where} no verdict: the reviewer did not judge this earlier finding, so it counts as not fixed.`
+        : `- ${where} not fixed: ${verdict.note}`,
+    );
+  }
+  return judgement;
+}
+
+// Context block for the reviewer: each carried finding as an UNRESOLVED item with its id.
+export function renderCarried(carried: readonly CarriedFinding[]): string | undefined {
+  if (carried.length === 0) return undefined;
+  return carried
+    .map(
+      ({ id, finding }) =>
+        `id: ${id}\nstate: UNRESOLVED\nlocation: ${finding.path}:${finding.line}\n  ${finding.severity}: ${finding.title}\n  ${finding.body.replace(/\n/g, "\n  ")}`,
+    )
+    .join("\n\n");
 }
 
 export const maxLocalRounds = 3;

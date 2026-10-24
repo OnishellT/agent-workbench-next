@@ -322,3 +322,53 @@ export function renderBody({ review, sha, outside, threadNotes, notFixed = 0 }: 
   );
   return parts.join("\n\n");
 }
+
+// Findings outside the diff cannot be inline threads, so they live in the review body. A follow-up
+// round reads them back from the latest local review (the inverse of the bullets in renderBody).
+const outsideBullet = /^- \*\*(critical|major|minor|nit): (.+?)\*\* \(`(.+):(\d+)`\) /;
+
+export function parseOutsideFindings(body: string): Finding[] {
+  const start = body.indexOf("### Outside the diff\n");
+  if (start === -1) return [];
+  const rest = body.slice(start + "### Outside the diff\n".length);
+  const end = rest.search(/\n\n(?:### Earlier threads\n|<!-- local-review )/);
+  const lines = (end === -1 ? rest : rest.slice(0, end)).split("\n");
+  const findings: Finding[] = [];
+  let bodyLines: string[] = [];
+  for (const line of lines) {
+    const match = outsideBullet.exec(line);
+    if (match) {
+      findings.push({
+        path: match[3] ?? "",
+        line: Number(match[4]),
+        severity: match[1] as Severity,
+        title: match[2] ?? "",
+        body: "",
+      });
+      bodyLines = [line.slice(match[0].length)];
+    } else if (findings.length > 0) {
+      bodyLines.push(line);
+    }
+    const last = findings.at(-1);
+    if (last) last.body = bodyLines.join("\n");
+  }
+  return findings;
+}
+
+export interface CarriedFinding {
+  id: string;
+  finding: Finding;
+}
+
+// Unresolved findings carried into this round: those of the LATEST local review only (a finding
+// fixed earlier was dropped from that list, a not-fixed one was rendered again). Ids are
+// `outside:<sha7>:<index>` and are judged in `resolved` exactly like thread ids.
+export function carriedFindings(reviewBodies: readonly string[]): CarriedFinding[] {
+  const latest = reviewBodies.findLast((body) => parseMarker(body) !== undefined);
+  const marker = latest === undefined ? undefined : parseMarker(latest);
+  if (latest === undefined || marker === undefined) return [];
+  return parseOutsideFindings(latest).map((finding, index) => ({
+    id: `outside:${marker.sha.slice(0, 7)}:${index}`,
+    finding,
+  }));
+}

@@ -31,14 +31,18 @@ import { rerunFailedGates } from "./review/rerun.ts";
 import {
   buildReviewPayload,
   dedupeFindings,
+  judgeCarried,
   missingVerdicts,
   noVerdictNote,
   finalizeReview,
   planThreadActions,
+  renderCarried,
   reviewGate,
   scopeFindings,
 } from "./review/policy.ts";
 import {
+  carriedFindings,
+  type CarriedFinding,
   decodeReview,
   findOutgoingLeak,
   inlineCommentBody,
@@ -157,6 +161,7 @@ interface PrData {
   threads: Thread[];
   earlierReviews: string[];
   earlierMarkers: Marker[];
+  carried: CarriedFinding[];
 }
 
 const threadsQuery = `
@@ -255,6 +260,7 @@ async function fetchPr(pr: number): Promise<PrData> {
       .map((review) => review.body)
       .filter((body) => parseMarker(body) !== undefined),
     earlierMarkers: myReviews.flatMap((review) => parseMarker(review.body) ?? []),
+    carried: carriedFindings(myReviews.map((review) => review.body)),
   };
 }
 
@@ -360,6 +366,10 @@ function buildContext(
           })
           .join("\n\n");
   sections.push(fenced("Earlier review threads (all reviewers)", threads));
+  const carried = renderCarried(data.carried);
+  if (carried !== undefined) {
+    sections.push(fenced("Earlier findings outside the diff (carried, no thread)", carried));
+  }
   sections.push(fenced("Commits of the pull request (oldest last)", commits));
   if (delta !== undefined) {
     sections.push(
@@ -662,21 +672,39 @@ async function main() {
       openThreads.has(verdict.threadId),
     );
     const unanswered = missingVerdicts(threadInfos, verdicts);
+    const carriedIds = new Set(data.carried.map((item) => item.id));
+    const carriedJudgement = judgeCarried(
+      data.carried,
+      (rawReview.resolved ?? []).filter((verdict) => carriedIds.has(verdict.threadId)),
+    );
     const notFixed =
-      verdicts.filter((verdict) => verdict.verdict === "not_fixed").length + unanswered.length;
+      verdicts.filter((verdict) => verdict.verdict === "not_fixed").length +
+      unanswered.length +
+      carriedJudgement.notFixed;
+    const carriedInfos = data.carried.map(({ id, finding }) => ({
+      id,
+      isResolved: false,
+      path: finding.path,
+      line: finding.line,
+      firstCommentId: 0,
+      text: `${finding.title}\n${finding.body}`,
+    }));
     const deltaLines = delta === undefined ? undefined : commentableLines(delta);
     const review = finalizeReview(
       rawReview,
-      dedupeFindings(scopeFindings(rawReview.findings, deltaLines), threadInfos),
+      dedupeFindings(scopeFindings(rawReview.findings, deltaLines), [...threadInfos, ...carriedInfos]),
       notFixed,
     );
-    const { inline, outside } = splitFindings(review.findings, commentableLines(diff));
+    const split = splitFindings(review.findings, commentableLines(diff));
+    const { inline } = split;
+    const outside = [...carriedJudgement.remaining.map((item) => item.finding), ...split.outside];
     const threadNotes = [
       ...verdicts.map((verdict) => {
         const thread = openThreads.get(verdict.threadId);
         return `- \`${thread?.path}:${thread?.line ?? "outdated"}\` ${verdict.verdict === "fixed" ? "fixed" : "not fixed"}: ${verdict.note}`;
       }),
       ...unanswered.map(noVerdictNote),
+      ...carriedJudgement.notes,
     ];
     const body = renderBody({ review, sha: data.sha, outside, threadNotes, notFixed });
     const secrets = localSecrets(mainClone);

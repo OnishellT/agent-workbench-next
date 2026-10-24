@@ -7,10 +7,13 @@ import {
   decodeReview,
   extractJson,
   inlineCommentBody,
+  carriedFindings,
   parseMarker,
+  parseOutsideFindings,
   renderBody,
   splitFindings,
   stripHtmlComments,
+  type Finding,
 } from "./result.ts";
 
 const valid = {
@@ -199,4 +202,48 @@ test("a clean review is not flagged", () => {
   expect(findOutgoingLeak(clean, [pem, 'pa"ss-12345', "short"])).toBe(false);
   expect(findOutgoingLeak(["x"], [])).toBe(false);
   expect(findOutgoingLeak(["a short x"], ["x", "abc\ndef"])).toBe(false);
+});
+
+const outsideReview = {
+  confidence: 3,
+  summary: "S.",
+  findings: [] as Finding[],
+};
+const render = (outside: Finding[], sha = "abcdef0123", threadNotes: string[] = []) =>
+  renderBody({ review: outsideReview, sha, outside, threadNotes });
+
+test("outside findings survive render then parse, including multi-line bodies and colons in paths", () => {
+  const outside: Finding[] = [
+    { path: "a/b.ts", line: 3, severity: "major", title: "Bug **bold**", body: "One.\n\nTwo: `x`." },
+    { path: "c:d.go", line: 12, severity: "nit", title: "Name", body: "Rename." },
+  ];
+  expect(parseOutsideFindings(render(outside, "abcdef0123", ["- note"]))).toEqual(outside);
+  expect(parseOutsideFindings(render(outside))).toEqual(outside);
+});
+
+test("a body without an outside section parses to nothing", () => {
+  expect(parseOutsideFindings(render([]))).toEqual([]);
+  expect(parseOutsideFindings("plain text")).toEqual([]);
+});
+
+test("rendering without outside findings is unchanged", () => {
+  expect(render([])).not.toContain("Outside the diff");
+});
+
+test("carried findings come from the latest local review only, with stable ids", () => {
+  const first = render([{ path: "a.ts", line: 1, severity: "minor", title: "Old", body: "x" }], "1111111aaaa");
+  const second = render(
+    [
+      { path: "b.ts", line: 2, severity: "major", title: "Kept", body: "y" },
+      { path: "c.ts", line: 3, severity: "minor", title: "Also", body: "z" },
+    ],
+    "2222222bbbb",
+  );
+  expect(carriedFindings([first, second]).map((c) => c.id)).toEqual([
+    "outside:2222222:0",
+    "outside:2222222:1",
+  ]);
+  expect(carriedFindings([first, render([], "3333333cccc")])).toEqual([]);
+  expect(carriedFindings([])).toEqual([]);
+  expect(carriedFindings(["no marker here"])).toEqual([]);
 });

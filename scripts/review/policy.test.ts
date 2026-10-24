@@ -4,9 +4,11 @@ import {
   clampConfidence,
   dedupeFindings,
   finalizeReview,
+  judgeCarried,
   missingVerdicts,
   noVerdictNote,
   planThreadActions,
+  renderCarried,
   reviewGate,
   scopeFindings,
   type ThreadInfo,
@@ -183,4 +185,44 @@ test("open threads without a verdict are reported, resolved ones are not", () =>
   expect(noVerdictNote(thread("T2", false))).toContain("`a.ts:outdated` no verdict");
   expect(clampConfidence(5, [], missingVerdicts(threads, verdicts).length)).toBe(3);
   expect(clampConfidence(5, [], 0)).toBe(5);
+});
+
+const carried = [
+  { id: "outside:abcdef0:0", finding: finding({ path: "a.ts", line: 5, severity: "major", title: "One" }) },
+  { id: "outside:abcdef0:1", finding: finding({ path: "b.ts", line: 6, severity: "minor", title: "Two" }) },
+  { id: "outside:abcdef0:2", finding: finding({ path: "c.ts", line: 7, severity: "nit", title: "Three" }) },
+];
+
+test("carried findings: fixed drops, not_fixed and no verdict stay and count (nits do not)", () => {
+  const judged = judgeCarried(carried, [
+    { threadId: "outside:abcdef0:0", verdict: "fixed", note: "gone" },
+    { threadId: "outside:abcdef0:1", verdict: "not_fixed", note: "still" },
+  ]);
+  expect(judged.remaining.map((c) => c.id)).toEqual(["outside:abcdef0:1", "outside:abcdef0:2"]);
+  expect(judged.notFixed).toBe(1);
+  expect(judged.notes.join("\n")).toContain("fixed: gone");
+  expect(judgeCarried(carried, []).notFixed).toBe(2);
+  expect(judgeCarried([], []).remaining).toEqual([]);
+});
+
+test("a carried not_fixed finding is rendered again so the next round carries it", () => {
+  const judged = judgeCarried(carried, [
+    { threadId: "outside:abcdef0:0", verdict: "not_fixed", note: "still" },
+  ]);
+  const body = renderBody({
+    review: { confidence: 3, summary: "S.", findings: [] },
+    sha: "9999999",
+    outside: judged.remaining.map((c) => c.finding),
+    threadNotes: judged.notes,
+    notFixed: judged.notFixed,
+  });
+  expect(parseMarker(body)?.actionable).toBe(2);
+  expect(body).toContain("### Outside the diff");
+  expect(body).toContain("**major: One**");
+});
+
+test("the carried section lists ids and is absent when nothing is carried", () => {
+  expect(renderCarried([])).toBeUndefined();
+  expect(renderCarried(carried)).toContain("id: outside:abcdef0:1");
+  expect(renderCarried(carried)).toContain("UNRESOLVED");
 });

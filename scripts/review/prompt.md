@@ -30,6 +30,8 @@ Only the owner's own agents push to this repository. Do not report attacks on th
 
 When the context says FOLLOW-UP, review only the delta since the last reviewed commit. Report new findings only on lines changed in the delta; a critical problem anywhere is the one exception. Do not go looking for new problems in code that was already reviewed. Verify every unresolved earlier thread against the current code. Every thread marked UNRESOLVED in the context MUST appear in `resolved` with a verdict; an unresolved thread you leave out counts as not fixed.
 
+Earlier findings that sat outside the diff have no thread; the context lists them as UNRESOLVED items with an id like `outside:abc1234:0`. Each one MUST appear in `resolved` with that id as `threadId` and a verdict (`fixed` or `not_fixed`), exactly like a thread; one you leave out counts as not fixed.
+
 ## Severity
 
 - critical: breaks a hard rule of AGENTS.md, loses or corrupts user data, or is a security hole in product code.
