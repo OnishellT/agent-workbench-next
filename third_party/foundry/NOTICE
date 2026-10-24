@@ -1,0 +1,20 @@
+Conversation Foundry Loop extends the independent Conversation Foundry integration.
+The vendored redaction helper (foundry_loop/vendor/foundry/redact.py) originates from that project, reviewed at Necmttn/ax commit c2aef9b876dcd96d8115f4be4a6b3c0da6d42a77.
+Original AGPL-3.0-only license retained. See VENDOR_PROVENANCE.json.
+Design references: https://github.com/PrimeIntellect-ai/prime-agent and https://github.com/NousResearch/hermes-agent . No Prime or Hermes runtime is bundled.
+
+Vendored engine: foundry_loop/vendor/skill_extractor/lib.py is the unmodified
+skill-extractor library (Copyright 2026 Surenode, Apache-2.0,
+https://github.com/surenode-ai/skill-extractor, commit
+c53b6dd63d293fa0d44f710a6f63720541f094d0). Its LICENSE and NOTICE are kept next
+to it. Foundry drives it through its documented library surface and data
+contracts (candidates.jsonl / decisions.jsonl) via foundry_loop/miner.py; no
+upstream code was rewritten or restyled.
+Design references only (nothing vendored): gzb1128/skill-forge (MIT,
+paired-trial isolation rules), hqhq1025/skill-optimizer (MIT,
+personalize/generalize split), Fergana-Labs/stash (MIT, learning from reviewer
+comments), future-agi/agent-learning-kit (Apache-2.0, capability-profile
+freezing), NousResearch/hermes-agent-self-evolution (MIT, not bundled).
+Licence decision 2026-10-22: the combined system ships as AGPL-3.0-only
+(permissive sources vendored inward; one-way direction). See
+VENDOR_PROVENANCE.json for commits and sha256 digests.

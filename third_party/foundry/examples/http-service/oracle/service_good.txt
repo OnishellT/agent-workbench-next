@@ -1,0 +1,16 @@
+import json, os, sqlite3
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+db=sqlite3.connect(os.environ.get('DATA_FILE','items.sqlite'))
+db.execute('CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, body TEXT NOT NULL)'); db.commit()
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self,*args): pass
+    def do_POST(self):
+        value=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        db.execute('INSERT OR REPLACE INTO items VALUES (?,?)',(value['id'],json.dumps(value))); db.commit()
+        self.send_response(201); self.end_headers(); self.wfile.write(b'ok')
+    def do_GET(self):
+        row=db.execute('SELECT body FROM items WHERE id=?',(self.path.removeprefix('/items/'),)).fetchone()
+        self.send_response(200 if row else 404); self.send_header('Content-Type','application/json'); self.end_headers()
+        self.wfile.write((row[0] if row else 'null').encode())
+HTTPServer(('127.0.0.1',int(os.environ['PORT'])),Handler).serve_forever()

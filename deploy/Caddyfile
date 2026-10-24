@@ -1,0 +1,48 @@
+# Reverse proxy for a VPS. Used by the `caddy` service (profile `vps`) in compose.yaml.
+# Set WORKBENCH_PUBLIC_URL=https://{$WORKBENCH_DOMAIN} and SIM_PUBLIC_URL=https://{$SIM_DOMAIN}
+# in .env so both apps know their public origins.
+{
+	email {$ACME_EMAIL}
+	# No admin API: nothing needs live reconfiguration and the socket stays closed.
+	admin off
+}
+
+# Compression and HSTS apply to every site below.
+(common) {
+	encode zstd gzip
+}
+
+# Dashboard. /health is answered as a loopback request so external monitors can use it.
+{$WORKBENCH_DOMAIN} {
+	import common
+	header Strict-Transport-Security "max-age=31536000"
+	handle /health {
+		reverse_proxy 127.0.0.1:18888 {
+			header_up Host 127.0.0.1:18888
+		}
+	}
+	reverse_proxy 127.0.0.1:18888
+}
+
+# One origin per registered host for its native Magpie panel (h-<hash>.<domain>).
+# WARNING: a wildcard certificate requires the DNS-01 challenge. Without a Caddy image
+# that bundles your DNS module (CADDY_IMAGE) and the tls block below uncommented, issuance
+# for this block fails (HTTP-01 cannot validate wildcards) and per-host Magpie panels stay
+# unreachable over HTTPS. The dashboard and Sim sites above are unaffected.
+*.{$WORKBENCH_DOMAIN} {
+	import common
+	# tls {
+	# 	dns cloudflare {$CADDY_DNS_TOKEN}
+	# }
+	reverse_proxy 127.0.0.1:18889
+}
+
+# Sim: the app on 3000 and its realtime server on 3002 share the origin.
+{$SIM_DOMAIN} {
+	import common
+	header Strict-Transport-Security "max-age=31536000"
+	handle /socket.io/* {
+		reverse_proxy 127.0.0.1:3002
+	}
+	reverse_proxy 127.0.0.1:3000
+}

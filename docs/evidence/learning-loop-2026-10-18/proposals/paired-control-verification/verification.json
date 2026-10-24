@@ -1,0 +1,189 @@
+{
+  "working_directory": "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/state/memu",
+  "evidence_manifest": "export/manifest.json",
+  "evidence": [
+    {
+      "id": "loop-csv-1",
+      "revision": "d97c519c5eeeeb055cd3a4af94b4caf9739b3286ba61fbc413a9bac7dfd9a46d",
+      "project": "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/inventory",
+      "host": "pc-linux-50",
+      "source_id": "host-history-9eefa7c0bd82cc1802d0f9edd54318b2",
+      "file": "276712ded50a0a741626fe47.jsonl",
+      "events": [
+        {
+          "event_index": 3,
+          "event_id": "generated_eaa544a47db5ff66d2c8adde",
+          "source_line": 4,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        },
+        {
+          "event_index": 5,
+          "event_id": "generated_c3543e59cba4c944b01e4702",
+          "source_line": 6,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        }
+      ]
+    },
+    {
+      "id": "loop-csv-2",
+      "revision": "b0c4666261e95acad34b4c3212fbe0fa979b38c7711fa7b648b85bbb9d82107b",
+      "project": "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/inventory",
+      "host": "pc-linux-50",
+      "source_id": "host-history-9eefa7c0bd82cc1802d0f9edd54318b2",
+      "file": "19203452a47f332782877a16.jsonl",
+      "events": [
+        {
+          "event_index": 3,
+          "event_id": "generated_0a251c5a673bfe68cf3deef8",
+          "source_line": 4,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        },
+        {
+          "event_index": 5,
+          "event_id": "generated_89d685d19831fb900031b718",
+          "source_line": 6,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        }
+      ]
+    },
+    {
+      "id": "loop-json-1",
+      "revision": "70ea63b14c8621967ddacfa2000e652ca84d238680c47090f6b0549b6253b27d",
+      "project": "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/web-localization",
+      "host": "local",
+      "source_id": "source_37b4281cb81d65ccd98b144dc34b8b8f",
+      "file": "cabb16b02d21a9d1157344d9.jsonl",
+      "events": [
+        {
+          "event_index": 3,
+          "event_id": "generated_99d5c15010429a7001f5862c",
+          "source_line": 4,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        },
+        {
+          "event_index": 5,
+          "event_id": "generated_a93ceb40975ed1e8cd89b5cc",
+          "source_line": 6,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        }
+      ]
+    },
+    {
+      "id": "loop-json-2",
+      "revision": "4b8d9dc0092777198cc77eb16fce43f02a67d1e35aa00b3b542aa5183e095938",
+      "project": "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/web-localization",
+      "host": "local",
+      "source_id": "source_37b4281cb81d65ccd98b144dc34b8b8f",
+      "file": "a393345771ea9e185a03860c.jsonl",
+      "events": [
+        {
+          "event_index": 3,
+          "event_id": "generated_2b89050ccae2983972b62d02",
+          "source_line": 4,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        },
+        {
+          "event_index": 5,
+          "event_id": "generated_1142ca1d61d3648aa6447ab0",
+          "source_line": 6,
+          "role": "tool",
+          "kind": "tool_result",
+          "exported": true
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "skill": "inventory-csv-verification",
+      "control": "positive",
+      "command": [
+        "python3",
+        "skill/inventory-csv-verification/scripts/inventory-csv-verifier.py",
+        "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/inventory/valid.csv"
+      ],
+      "exit_code": 0,
+      "stdout": "accepted\n",
+      "stderr": "",
+      "expected": [
+        0,
+        "accepted\n",
+        ""
+      ],
+      "matched": true,
+      "script_sha256": "db976de8d993515aab2da95e06459cf0549d4f0f082993cd1075f0eb6c3a6e9f"
+    },
+    {
+      "skill": "inventory-csv-verification",
+      "control": "negative",
+      "command": [
+        "python3",
+        "skill/inventory-csv-verification/scripts/inventory-csv-verifier.py",
+        "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/inventory/invalid.csv"
+      ],
+      "exit_code": 1,
+      "stdout": "rejected: duplicate inventory SKU\n",
+      "stderr": "",
+      "expected": [
+        1,
+        "rejected: duplicate inventory SKU\n",
+        ""
+      ],
+      "matched": true,
+      "script_sha256": "db976de8d993515aab2da95e06459cf0549d4f0f082993cd1075f0eb6c3a6e9f"
+    },
+    {
+      "skill": "website-localization-json-verification",
+      "control": "positive",
+      "command": [
+        "python3",
+        "skill/website-localization-json-verification/scripts/website-localization-json-verifier.py",
+        "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/web-localization/valid.json"
+      ],
+      "exit_code": 0,
+      "stdout": "accepted\n",
+      "stderr": "",
+      "expected": [
+        0,
+        "accepted\n",
+        ""
+      ],
+      "matched": true,
+      "script_sha256": "ce9a5cc7b2863ccdc047358efc1723072693c4b0572f2fbfbfecc759fd8057d8"
+    },
+    {
+      "skill": "website-localization-json-verification",
+      "control": "negative",
+      "command": [
+        "python3",
+        "skill/website-localization-json-verification/scripts/website-localization-json-verifier.py",
+        "/home/dev/.local/state/agent-workbench-dashboard/loop-acceptance/web-localization/invalid.json"
+      ],
+      "exit_code": 1,
+      "stdout": "rejected: duplicate JSON key\n",
+      "stderr": "",
+      "expected": [
+        1,
+        "rejected: duplicate JSON key\n",
+        ""
+      ],
+      "matched": true,
+      "script_sha256": "ce9a5cc7b2863ccdc047358efc1723072693c4b0572f2fbfbfecc759fd8057d8"
+    }
+  ],
+  "summary": "4/4 exact exit-code, stdout and stderr matches"
+}

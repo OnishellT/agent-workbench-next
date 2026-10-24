@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "setup": "done",
+  "verify": [
+    "nix develop -c sh -c 'cd web && bun install --frozen-lockfile && bun run build'",
+    "nix develop -c go vet -tags nogui ./cmd/... ./internal/... ./web/...",
+    "nix develop -c env GOAMD64=v1 go test -tags nogui ./cmd/... ./internal/... ./web/..."
+  ],
+  "connectors": [
+    {
+      "id": "github",
+      "mcp": {
+        "url": "https://api.githubcopilot.com/mcp/"
+      }
+    }
+  ],
+  "language": "English",
+  "startedAt": "2026-10-21T06:10:50.909Z",
+  "completedAt": "2026-10-21T06:23:03.023Z"
+}

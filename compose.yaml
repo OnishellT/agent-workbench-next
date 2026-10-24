@@ -1,0 +1,245 @@
+name: agent-workbench
+
+services:
+  workbench:
+    build:
+      context: .
+      args:
+        # Identidad del release que publica la UI, /health y --version.
+        VERSION: ${WORKBENCH_VERSION:-development}
+    image: agent-workbench:local
+    platform: linux/amd64
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 90s
+    environment:
+      WORKBENCH_MAGPIE_ORIGIN: ${WORKBENCH_MAGPIE_ORIGIN:-}
+      MEMU_MEMORY_MODE: local
+      MEMU_DB: /data/memu-memory.sqlite3
+      MEMU_EMBED_PROVIDER: openai
+      # Defaults point at the local Ollama service; set these three in .env to use an
+      # external OpenAI-compatible embeddings endpoint and skip Ollama on a small VPS.
+      MEMU_BASE_URL: ${MEMU_BASE_URL:-http://127.0.0.1:11434/v1}
+      MEMU_EMBED_MODEL: ${MEMU_EMBED_MODEL:-all-minilm:22m}
+      MEMU_API_KEY: ${MEMU_API_KEY:-ollama}
+    command:
+      - --listen
+      - 127.0.0.1:18888
+      - --public-url
+      - ${WORKBENCH_PUBLIC_URL:-http://127.0.0.1:18888}
+      - --trusted-proxy
+      - 127.0.0.1/32
+      - --sim-url
+      - ${SIM_PUBLIC_URL:-http://127.0.0.1:3000}
+    volumes:
+      - workbench_data:/data
+    # Waits for the local embedding model only when those services run. With an external
+    # MEMU_BASE_URL start without them:
+    #   docker compose up -d --scale embeddings=0 --scale embeddings-init=0
+    depends_on:
+      embeddings-init:
+        condition: service_completed_successfully
+        required: false
+    # The runtime image has python3 but no curl; /health answers only to loopback peers,
+    # which the host network satisfies. 503 means ui/models failed, not a remote host.
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18888/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # TLS reverse proxy for a VPS: `docker compose --profile vps up`. It must share the
+  # host network because Workbench only trusts X-Forwarded-Proto from loopback proxies.
+  caddy:
+    profiles: [vps]
+    # A wildcard certificate for the per-host Magpie panels needs a Caddy build with your
+    # DNS provider module, e.g. ghcr.io/caddybuilds/caddy-cloudflare:<minor tag>.
+    image: ${CADDY_IMAGE:-caddy:2.10}
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      WORKBENCH_DOMAIN: ${WORKBENCH_DOMAIN:?public hostname of Workbench, e.g. wb.example.com}
+      SIM_DOMAIN: ${SIM_DOMAIN:?public hostname of Sim, e.g. sim.example.com}
+      ACME_EMAIL: ${ACME_EMAIL:?contact email for the ACME account, e.g. ops@example.com}
+      CADDY_DNS_TOKEN: ${CADDY_DNS_TOKEN:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    # Caddy's admin API is off; a listening TLS port is the cheap liveness signal.
+    healthcheck:
+      test: [CMD-SHELL, "nc -z 127.0.0.1 443"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  sim:
+    build:
+      context: third_party/sim
+      dockerfile: docker/app.Dockerfile
+    image: workbench-sim:${SIM_VERSION:-v0.9.25}
+    platform: linux/amd64
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 127.0.0.1
+      PORT: "3000"
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?generate a new hexadecimal password}@127.0.0.1:15432/simstudio
+      REDIS_URL: redis://:${REDIS_PASSWORD:?generate a new hexadecimal password}@127.0.0.1:16380
+      BETTER_AUTH_URL: ${SIM_PUBLIC_URL:-http://127.0.0.1:3000}
+      NEXT_PUBLIC_APP_URL: ${SIM_PUBLIC_URL:-http://127.0.0.1:3000}
+      WORKBENCH_FRAME_ORIGIN: ${WORKBENCH_PUBLIC_URL:-http://127.0.0.1:18888}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?generate a new persistent secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?generate a new persistent secret}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?generate a new persistent secret}
+      CRON_SECRET: ${CRON_SECRET:?generate a new persistent secret}
+      SOCKET_SERVER_URL: http://127.0.0.1:3002
+      NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-}
+      NEXT_PUBLIC_CHAT_DISABLED: ${NEXT_PUBLIC_CHAT_DISABLED:-true}
+      COPILOT_API_KEY: ${COPILOT_API_KEY:-}
+      STORAGE_PROVIDER: local
+    volumes:
+      - sim_uploads:/app/apps/sim/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      realtime:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3000]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  realtime:
+    build:
+      context: third_party/sim
+      dockerfile: docker/realtime.Dockerfile
+    image: workbench-sim-realtime:${SIM_VERSION:-v0.9.25}
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:3002:3002
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?generate a new hexadecimal password}@db:5432/simstudio
+      REDIS_URL: redis://:${REDIS_PASSWORD:?generate a new hexadecimal password}@redis:6379
+      NEXT_PUBLIC_APP_URL: ${SIM_PUBLIC_URL:-http://127.0.0.1:3000}
+      BETTER_AUTH_URL: ${SIM_PUBLIC_URL:-http://127.0.0.1:3000}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?generate a new persistent secret}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?generate a new persistent secret}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3002/health]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  migrations:
+    build:
+      context: third_party/sim
+      dockerfile: docker/db.Dockerfile
+    image: workbench-sim-migrations:${SIM_VERSION:-v0.9.25}
+    platform: linux/amd64
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?generate a new hexadecimal password}@db:5432/simstudio
+    depends_on:
+      db:
+        condition: service_healthy
+    command: [bun, run, db:migrate]
+    restart: "no"
+
+  cron:
+    build:
+      context: third_party/sim
+      dockerfile: docker/cron.Dockerfile
+    image: workbench-sim-cron:${SIM_VERSION:-v0.9.25}
+    platform: linux/amd64
+    network_mode: host
+    restart: on-failure
+    environment:
+      SIM_URL: http://127.0.0.1:3000
+      CRON_SECRET: ${CRON_SECRET:?generate a new persistent secret}
+      TZ: UTC
+    depends_on:
+      sim:
+        condition: service_healthy
+
+  # db and redis publish only on loopback because `sim` and `cron` run on the host
+  # network and reach them there; nothing outside this machine can connect.
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:15432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: simstudio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?generate a new hexadecimal password}
+    volumes:
+      - sim_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d simstudio]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2.11-alpine
+    restart: unless-stopped
+    # The password reaches redis-server through the environment, not the process list.
+    # Use a hexadecimal value: it travels inside REDIS_URL unescaped.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?generate a new hexadecimal password}
+    command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD"']
+    ports:
+      - 127.0.0.1:16380:6379
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  embeddings:
+    image: ollama/ollama:0.40.6
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:11434:11434
+    volumes:
+      - memu_embeddings:/root/.ollama
+    healthcheck:
+      test: [CMD, ollama, list]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  embeddings-init:
+    image: ollama/ollama:0.40.6
+    environment:
+      OLLAMA_HOST: http://embeddings:11434
+    command: [pull, "all-minilm:22m"]
+    depends_on:
+      embeddings:
+        condition: service_healthy
+
+volumes:
+  workbench_data:
+  memu_embeddings:
+  sim_postgres:
+  sim_uploads:
+  caddy_data:
+  caddy_config:

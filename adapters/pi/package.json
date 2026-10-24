@@ -1,0 +1,15 @@
+{
+  "name": "agent-workbench-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: lets the agent read and operate Workbench through its HTTP API",
+  "keywords": ["pi-package"],
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

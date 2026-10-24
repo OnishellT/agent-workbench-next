@@ -1,0 +1,8 @@
+task:
+  maxConcurrency: 3
+memory:
+  backend: "off"
+autolearn:
+  enabled: false
+automation:
+  enabled: false

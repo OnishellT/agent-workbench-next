@@ -1,0 +1,7 @@
+node_modules/
+dist/
+tests/e2e/report/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo

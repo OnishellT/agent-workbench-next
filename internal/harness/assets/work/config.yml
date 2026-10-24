@@ -1,0 +1,104 @@
+# Native OMP work profile. Repository context may come only from .omp/.
+# Model roles are selected through this host's Magpie configuration.
+setupVersion: 2
+
+advisor:
+  enabled: false
+prewalk:
+  enabled: false
+extendedContext: true
+compaction:
+  enabled: true
+  # With a 1M-capable model this triggers near 400K tokens.
+  thresholdPercent: 40
+  thresholdTokens: -1
+  keepRecentTokens: 32000
+  dropUseless: true
+
+retry:
+  maxRetries: 3
+  modelFallback: true
+  usageAwareFallback: true
+  usageReservePct: 10
+  usageReservePolicy: auto
+  fallbackRevertPolicy: cooldown-expiry
+
+extensions: []
+disabledProviders:
+  - agents
+  - agents-md
+  - agent-plugins
+  - claude
+  - claude-plugins
+  - codex
+  - gemini
+  - github
+  - mcp-json
+  - opencode
+  - openai-codex
+  - ssh-json
+  - vscode
+  - windsurf
+  - cursor
+  - cline
+
+mcp:
+  enableProjectConfig: false
+
+browser:
+  enabled: true
+  relay: true
+  headless: true
+  cmux: false
+
+memory:
+  backend: off
+
+commands:
+  enableClaudeUser: false
+  enableClaudeProject: false
+  enableOpencodeUser: false
+  enableOpencodeProject: false
+
+skills:
+  enabled: true
+  enableSkillCommands: true
+  enableAgentsProject: false
+  enableAgentsUser: false
+  enableClaudeProject: false
+  enableClaudeUser: false
+  enableCodexUser: false
+  enablePiUser: false
+  enablePiProject: true
+  customDirectories: []
+  includeSkills: []
+  # Ponytail's default extension stays active, but its optional user skills do not load.
+  ignoredSkills:
+    - ponytail
+    - ponytail-audit
+    - ponytail-debt
+    - ponytail-gain
+    - ponytail-help
+    - ponytail-review
+
+task:
+  eager: preferred
+  batch: true
+  showResolvedModelBadge: true
+  maxConcurrency: 2
+  maxRecursionDepth: 1
+  enableLsp: false
+  softRequestBudget: 24
+  maxEffort: medium
+  agentModelOverrides:
+    task: "@task"
+    scout: "@smol"
+    librarian: "@smol"
+    reviewer: "@slow"
+    security-reviewer: "@plan"
+  agentPrewalk:
+    task: "off"
+    scout: "off"
+    librarian: "off"
+    reviewer: "off"
+    security-reviewer: "off"

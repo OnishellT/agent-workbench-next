@@ -1,0 +1,718 @@
+import { db } from '@sim/db'
+import { permissions, workspace } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import type { PermissionType } from '@sim/platform-authz/workspace'
+import { getErrorMessage } from '@sim/utils/errors'
+import { generateId } from '@sim/utils/id'
+import { and, eq } from 'drizzle-orm'
+import type { Workspace } from '@/lib/api/contracts/workspaces'
+import { enqueueOutboxEvent } from '@/lib/core/outbox/service'
+import { requireForkProject } from '@/lib/projects/membership'
+import { buildDefaultWorkflowArtifacts } from '@/lib/workflows/defaults'
+import { insertNewWorkflowRow } from '@/lib/workflows/persistence/new-workflow-row'
+import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
+import type { ForkRemapKind } from '@/lib/workflows/references/remap-references'
+import {
+  collectReferencedDocumentIds,
+  collectReferencedFileFolderPaths,
+} from '@/lib/workflows/references/scan'
+import { WORKSPACE_OPERATION_OBSERVE_EVENT } from '@/lib/workspaces/operations/outbox-events'
+import {
+  findWorkspaceOperationReceipt,
+  insertWorkspaceOperationReceipt,
+  lockWorkspaceOperationRequest,
+  type WorkspaceOperationReport,
+} from '@/lib/workspaces/operations/receipts'
+import type { WorkspaceWithOwner } from '@/lib/workspaces/permissions/utils'
+import type { WorkspaceCreationPolicy } from '@/lib/workspaces/policy'
+import { WORKSPACE_MODE } from '@/lib/workspaces/policy'
+import { enqueueDurableForkContent } from '@/ee/workspace-forking/application/content-outbox'
+import {
+  assertForkPreviewFresh,
+  assertForkSourceVersions,
+  type ForkMutationAdmission,
+  lockForkRevision,
+} from '@/ee/workspace-forking/application/revision'
+import {
+  finishBackgroundWork,
+  startBackgroundWork,
+} from '@/ee/workspace-forking/lib/background-work/store'
+import {
+  type ForkContentCopyPayload,
+  hasForkContentToCopy,
+  scheduleForkContentCopy,
+  serializeContentRefMaps,
+} from '@/ee/workspace-forking/lib/copy/content-copy-runner'
+import { copyForkChatDeployments } from '@/ee/workspace-forking/lib/copy/copy-chats'
+import { planForkFileCopies } from '@/ee/workspace-forking/lib/copy/copy-files'
+import {
+  copyForkResourceContainers,
+  type ForkCopiedResourceNames,
+} from '@/ee/workspace-forking/lib/copy/copy-resources'
+import {
+  copyWorkflowStateIntoTarget,
+  loadWorkflowNameRegistry,
+  resolveForkFolderMapping,
+} from '@/ee/workspace-forking/lib/copy/copy-workflows'
+import { loadSourceDeployedStates } from '@/ee/workspace-forking/lib/copy/deploy-bridge'
+import {
+  assertForkStorageHeadroom,
+  sumForkCopyBytes,
+} from '@/ee/workspace-forking/lib/copy/storage-quota'
+import { buildForkWorkflowIdMap } from '@/ee/workspace-forking/lib/copy/workflow-id-map'
+import { copyForkWorkflowMcpAttachments } from '@/ee/workspace-forking/lib/copy/workflow-mcp-attachments'
+import { ForkError } from '@/ee/workspace-forking/lib/lineage/authz'
+import {
+  acquireForkLineageLock,
+  setForkLockTimeout,
+} from '@/ee/workspace-forking/lib/lineage/lineage'
+import { resolveForkLineageRootId } from '@/ee/workspace-forking/lib/lineage/lineage-root'
+import {
+  type ForkBlockPair,
+  reconcileForkBlockPairs,
+  toForkBlockPairs,
+} from '@/ee/workspace-forking/lib/mapping/block-map-store'
+import {
+  type ForkMappingUpsert,
+  type ForkResourceType,
+  seedEdgeMappings,
+} from '@/ee/workspace-forking/lib/mapping/mapping-store'
+import { deriveForkBlockId } from '@/ee/workspace-forking/lib/remap/block-identity'
+import { createForkBootstrapTransform } from '@/ee/workspace-forking/lib/remap/fork-bootstrap'
+
+const logger = createLogger('WorkspaceForkCreate')
+
+/** Source resource ids the user selected to copy into the child, by kind. */
+export interface ForkResourceSelection {
+  files: string[]
+  tables: string[]
+  knowledgeBases: string[]
+  customTools: string[]
+  skills: string[]
+  /** External MCP servers, copied as config rows (OAuth tokens never copied - re-auth in child). */
+  mcpServers: string[]
+  /** Workflow-publishing MCP servers, copied as config-only shells with no workflows attached. */
+  workflowMcpServers: string[]
+}
+
+const EMPTY_SELECTION: ForkResourceSelection = {
+  files: [],
+  tables: [],
+  knowledgeBases: [],
+  customTools: [],
+  skills: [],
+  mcpServers: [],
+  workflowMcpServers: [],
+}
+
+export interface CreateForkParams {
+  admission?: ForkMutationAdmission
+  source: WorkspaceWithOwner
+  policy: WorkspaceCreationPolicy
+  userId: string
+  /** Display name of the user forking, recorded on the activity entry. */
+  actorName?: string
+  name?: string
+  selection?: ForkResourceSelection
+  requestId?: string
+}
+
+export interface CreateForkResult {
+  operation?: WorkspaceOperationReport
+  replayed?: boolean
+  /** Full child workspace row so callers can merge it into the workspace-list cache. */
+  workspace: Workspace
+  workflowsCopied: number
+}
+
+// Credentials are intentionally absent: a fork never copies them, so their references
+// resolve to null here and are cleared on remap (re-connect in the child).
+const FORK_KIND_TO_RESOURCE_TYPE: Partial<Record<ForkRemapKind, ForkResourceType>> = {
+  'custom-tool': 'custom_tool',
+  skill: 'skill',
+  table: 'table',
+  'knowledge-base': 'knowledge_base',
+  'knowledge-document': 'knowledge_document',
+  'mcp-server': 'mcp_server',
+}
+
+/**
+ * Create a fork of `source`: a new child workspace that copies the parent's
+ * **deployed** workflows (left undeployed in the child), snapshots the parent's
+ * member list, copies the user-selected resources (files, tables, knowledge bases,
+ * custom tools, skills, MCP server configs) with fresh ids, and records the
+ * source→child identity for each. Workflow references to copied resources are
+ * rewritten to the child ids; references to resources that were not copied (and
+ * all credential references) are cleared; env-var references are preserved.
+ */
+export async function createFork(params: CreateForkParams): Promise<CreateForkResult> {
+  const { source, policy, userId, requestId = 'unknown' } = params
+  const admission = params.admission
+  if (admission) {
+    const receipt = await findWorkspaceOperationReceipt(
+      db,
+      admission.workspaceId,
+      admission.requestId,
+      admission.requestHash
+    )
+    if (receipt?.forkResult) return { ...receipt.forkResult, operation: receipt, replayed: true }
+    await assertForkPreviewFresh(db, { sourceWorkspaceId: source.id }, admission)
+  }
+  const selection = params.selection ?? EMPTY_SELECTION
+  const childName = params.name?.trim() || `${source.name} (fork)`
+  const childWorkspaceId = generateId()
+
+  // UX-only preflight against the payer selected by the child workspace's creation policy.
+  // The authoritative per-blob admission + increment happens later with metadata activation.
+  const copyBytes = await sumForkCopyBytes(db, source.id, {
+    fileIds: selection.files,
+    knowledgeBaseIds: selection.knowledgeBases,
+  })
+  await assertForkStorageHeadroom({
+    plannedWorkspaceId: childWorkspaceId,
+    creationPolicy: policy,
+    bytes: copyBytes,
+  })
+
+  // The root is the lineage lock key, so it is resolved first and re-checked under the lock.
+  const lineageRootId = await resolveForkLineageRootId(db, source.id)
+
+  // Read the source's deployed workflows + states BEFORE the transaction so these
+  // global-pool reads don't check out a second pooled connection from inside the
+  // fork tx (which can deadlock the pool at saturation).
+  const { deployedWorkflows, sourceStates, sourceVersionIds } = await loadSourceDeployedStates(
+    source.id
+  )
+
+  // Documents the copied workflows reference (document-selector values + nested documentId
+  // tool params). Those whose parent KB is being copied get a placeholder + id map inside the
+  // fork tx so their references remap to the copied document instead of being cleared.
+  const referencedDocumentIds = collectReferencedDocumentIds(
+    deployedWorkflows.flatMap((wf) => {
+      const sourceState = sourceStates.get(wf.id)
+      return sourceState ? [sourceState] : []
+    })
+  )
+  const referencedFileFolderPaths = collectReferencedFileFolderPaths(
+    deployedWorkflows.flatMap((wf) => {
+      const sourceState = sourceStates.get(wf.id)
+      return sourceState ? [sourceState] : []
+    })
+  )
+
+  const forkedWorkflowNames: string[] = []
+  let forkedResourceNames: ForkCopiedResourceNames = {
+    tables: [],
+    knowledgeBases: [],
+    customTools: [],
+    skills: [],
+    mcpServers: [],
+    workflowMcpServers: [],
+  }
+  const transaction = await db.transaction(async (tx) => {
+    await setForkLockTimeout(tx)
+    if (admission) {
+      await lockWorkspaceOperationRequest(tx, admission.workspaceId, admission.requestId)
+      const receipt = await findWorkspaceOperationReceipt(
+        tx,
+        admission.workspaceId,
+        admission.requestId,
+        admission.requestHash
+      )
+      // Replay before the lineage lock, so an idempotent retry never waits on it.
+      if (receipt?.forkResult) return { replay: receipt }
+    }
+    // Rank 2, before `lockForkRevision` (rank 5) - see the rank table on
+    // `acquireForkLineageLock`. Shared: other forks of this lineage proceed, while
+    // `setForkSyncDefault` and unlink wait, so the child cannot inherit a stale default.
+    await acquireForkLineageLock(tx, lineageRootId, { shared: true })
+    // The root was resolved before this transaction; refuse if an unlink moved it since.
+    if ((await resolveForkLineageRootId(tx, source.id)) !== lineageRootId) {
+      throw new ForkError(
+        'The source workspace changed fork lineage while this fork was being created. Try again.',
+        409
+      )
+    }
+    const parentProject = await requireForkProject(tx, source.id)
+    await setForkLockTimeout(tx)
+    if (admission) {
+      await lockForkRevision(tx, { sourceWorkspaceId: source.id })
+      await assertForkPreviewFresh(tx, { sourceWorkspaceId: source.id }, admission)
+      await assertForkSourceVersions(tx, source.id, sourceVersionIds)
+    }
+    /**
+     * The lock alone is not enough: `policy.organizationId` was captured by
+     * `assertCanFork` BEFORE this transaction, so a re-home that commits in
+     * between leaves us locking the organization the parent has already left
+     * and inserting the child there, which is the exact cross-organization
+     * edge the lock was added to prevent. Re-read the parent under the lock
+     * and refuse if it moved; the caller can retry against the new
+     * organization.
+     */
+    const [currentSource] = await tx
+      .select({
+        organizationId: workspace.organizationId,
+        archivedAt: workspace.archivedAt,
+        forkSyncNewWorkflowsExcluded: workspace.forkSyncNewWorkflowsExcluded,
+      })
+      .from(workspace)
+      .where(eq(workspace.id, source.id))
+      /**
+       * The row lock IS the serialization, and deliberately the only one.
+       *
+       * A fork parent and child must always share an organization. Every writer
+       * that can re-home the parent takes `FOR NO KEY UPDATE` on its row: the
+       * admin workspace move, and `lockWorkspaceRowsForPayerChanges` on the
+       * organization-attach path. Locking it here makes those wait, and the
+       * comparison below then sees their committed result.
+       *
+       * Scope, stated plainly. This closes the ordering the admin move
+       * introduces: a re-home that commits first can no longer be forked
+       * against a stale policy. It does NOT close the reverse ordering, where
+       * a fork commits while a bulk attach or detach is already waiting on
+       * this row with a workspace list snapshotted before the child existed.
+       * That batch would then re-home the parent alone. It is a pre-existing
+       * gap in `attachOwnedWorkspacesToOrganizationTx` and
+       * `detachOrganizationWorkspacesTx`, not one the move creates, and
+       * closing it needs the descendant closure, the disclosure set, and the
+       * advisory-lock plan to move together. Tracked separately rather than
+       * half-fixed here, because a partial repair at commit time is strictly
+       * worse than a documented gap.
+       *
+       * An organization mutation lock was tried here and removed: it bought
+       * nothing the row lock does not already provide, could not cover a null
+       * policy organization at all, and cost three real problems. A lock-order
+       * inversion against invitation acceptance (which takes the workspace row
+       * before the organization lock), a 5s timeout overwriting this
+       * transaction's 10s one, and an organization-wide lock held across the
+       * whole content copy.
+       */
+      .for('no key update')
+      .limit(1)
+    if (!currentSource || currentSource.archivedAt) {
+      throw new ForkError('Source workspace is missing or archived', 404)
+    }
+    if ((currentSource.organizationId ?? null) !== (policy.organizationId ?? null)) {
+      throw new ForkError(
+        'The source workspace changed organizations while this fork was being created. Try again.',
+        409
+      )
+    }
+
+    const now = new Date()
+
+    await tx.insert(workspace).values({
+      id: childWorkspaceId,
+      projectId: parentProject.id,
+      name: childName,
+      ownerId: userId,
+      organizationId: policy.organizationId,
+      workspaceMode: policy.workspaceMode,
+      billedAccountUserId: policy.billedAccountUserId,
+      allowPersonalApiKeys: source.allowPersonalApiKeys,
+      // Lineage-uniform, so the child inherits the value read under the source row lock.
+      forkSyncNewWorkflowsExcluded: currentSource.forkSyncNewWorkflowsExcluded,
+      forkedFromWorkspaceId: source.id,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const sourcePermissions = await tx
+      .select({ userId: permissions.userId, permissionType: permissions.permissionType })
+      .from(permissions)
+      .where(and(eq(permissions.entityType, 'workspace'), eq(permissions.entityId, source.id)))
+
+    const permissionByUser = new Map<string, PermissionType>()
+    for (const row of sourcePermissions) {
+      permissionByUser.set(row.userId, row.permissionType)
+    }
+    permissionByUser.set(userId, 'admin')
+    if (
+      policy.workspaceMode === WORKSPACE_MODE.ORGANIZATION &&
+      policy.billedAccountUserId &&
+      policy.billedAccountUserId !== userId
+    ) {
+      permissionByUser.set(policy.billedAccountUserId, 'admin')
+    }
+
+    await tx.insert(permissions).values(
+      Array.from(permissionByUser.entries()).map(([memberUserId, permissionType]) => ({
+        id: generateId(),
+        entityType: 'workspace' as const,
+        entityId: childWorkspaceId,
+        userId: memberUserId,
+        permissionType,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    )
+
+    // The id map (and the identity seed below) covers only the workflows ACTUALLY copied -
+    // those whose deployed state loaded. A deployed source whose state failed to load is
+    // skipped by the copy loop, so it must be excluded here too: keeping it would (1) remap a
+    // copied workflow's reference to a child id that is never created (a dangling ref) instead
+    // of clearing it, and (2) seed a `workspace_fork_resource_map` workflow row pointing at
+    // that never-created target, which a later push would treat as an orphan and archive the
+    // parent's real workflow. Mirrors promote's writtenItems-only identity seed.
+    const workflowIdMap = buildForkWorkflowIdMap(deployedWorkflows, new Set(sourceStates.keys()))
+
+    const fileResult = await planForkFileCopies({
+      tx,
+      sourceWorkspaceId: source.id,
+      childWorkspaceId,
+      userId,
+      fileIds: selection.files,
+      folderPaths: Array.from(referencedFileFolderPaths),
+      now,
+    })
+
+    // Source -> child folder id map: remaps folder references in the copied workflows below and
+    // feeds the post-commit content-ref rewrite (`sim:folder/<id>` mentions in skill/file bodies).
+    // Scoped to the folders that will actually receive a copied workflow (plus ancestors): a
+    // fork copies only DEPLOYED workflows, so folders holding none would be created empty in
+    // the child and are pruned instead. The file/table/knowledge-base trees are mirrored
+    // separately by their own copies and merged in below.
+    const { folderIdMap: workflowFolderIdMap } = await resolveForkFolderMapping({
+      tx,
+      sourceWorkspaceId: source.id,
+      targetWorkspaceId: childWorkspaceId,
+      userId,
+      now,
+      resourceType: 'workflow',
+      contentFolderIds: deployedWorkflows
+        .filter((wf) => workflowIdMap.has(wf.id))
+        .map((wf) => wf.folderId),
+    })
+
+    const resourceResult = await copyForkResourceContainers({
+      tx,
+      sourceWorkspaceId: source.id,
+      childWorkspaceId,
+      userId,
+      now,
+      selection: {
+        customTools: selection.customTools,
+        skills: selection.skills,
+        mcpServers: selection.mcpServers,
+        workflowMcpServers: selection.workflowMcpServers,
+        tables: selection.tables,
+        knowledgeBases: selection.knowledgeBases,
+      },
+      workflowIdMap,
+      referencedDocumentIds: Array.from(referencedDocumentIds),
+      documentMappingContext: {
+        edgeChildWorkspaceId: childWorkspaceId,
+        sourceIsParent: true,
+      },
+    })
+    forkedResourceNames = resourceResult.names
+
+    /**
+     * Every mirrored folder tree in one map. The four families own disjoint trees and folder ids
+     * are globally unique, so the union is unambiguous: a `sim:folder/<id>` ref in copied content
+     * resolves regardless of which family's folder it names.
+     */
+    const folderIdMap = new Map<string, string>([
+      ...workflowFolderIdMap,
+      ...fileResult.folderIdMap,
+      ...resourceResult.folderIdMap,
+    ])
+
+    const resolveCopied = (kind: ForkRemapKind, sourceId: string): string | null => {
+      if (kind === 'file') return fileResult.keyMap.get(sourceId) ?? null
+      if (kind === 'file-folder') return fileResult.folderPathMap.get(sourceId) ?? null
+      const resourceType = FORK_KIND_TO_RESOURCE_TYPE[kind]
+      if (!resourceType) return null
+      return resourceResult.idMap.get(resourceType)?.get(sourceId) ?? null
+    }
+    const transform = createForkBootstrapTransform(resolveCopied)
+    // No block-type transform here: custom blocks are never copied into a fork and a fresh
+    // fork has no mappings yet, so a placed custom block necessarily keeps the parent's type.
+    // It surfaces as an unmapped reference in the sync view (via `scanWorkflowReferences`) and
+    // blocks the first promote until the environment's own block is mapped to it.
+
+    // The child is brand new, so this loads an empty registry; name collisions can only
+    // arise among the copied workflows themselves, which the in-loop claims resolve.
+    const nameRegistry = await loadWorkflowNameRegistry(tx, childWorkspaceId)
+
+    let workflowsCopied = 0
+    // Seed the block-identity map (parent block -> derived child block) so a later push of
+    // this fork resolves each child block back to the parent's ORIGINAL id instead of
+    // re-deriving and re-keying the parent's webhook URLs.
+    const blockPairs: ForkBlockPair[] = []
+    const sourceWorkflowIds: string[] = []
+    for (const wf of deployedWorkflows) {
+      const sourceState = sourceStates.get(wf.id)
+      if (!sourceState) continue
+      const targetWorkflowId = workflowIdMap.get(wf.id)!
+      const copyResult = await copyWorkflowStateIntoTarget({
+        tx,
+        targetWorkflowId,
+        targetWorkspaceId: childWorkspaceId,
+        userId,
+        mode: 'create',
+        now,
+        sourceState,
+        sourceMeta: {
+          name: wf.name,
+          description: wf.description,
+          folderId: wf.folderId,
+          sortOrder: wf.sortOrder,
+        },
+        workflowIdMap,
+        folderIdMap,
+        transformSubBlocks: transform,
+        nameRegistry,
+        requestId,
+      })
+      // Creation copies parent -> child, so the source side is the parent.
+      blockPairs.push(...toForkBlockPairs(copyResult.blockIdMapping, true, wf.id, targetWorkflowId))
+      sourceWorkflowIds.push(wf.id)
+      workflowsCopied += 1
+      forkedWorkflowNames.push(wf.name)
+    }
+    await reconcileForkBlockPairs(tx, childWorkspaceId, true, sourceWorkflowIds, blockPairs)
+
+    // Carry each copied workflow's chat deployment(s): a fresh identifier
+    // (`{child-workspace}-{workflow}-{randomnum}`) with the config copied verbatim and its
+    // output block ids remapped onto the derived child blocks. The chat serves at its new URL
+    // as soon as the child workflow is deployed.
+    await copyForkChatDeployments({
+      tx,
+      pairs: deployedWorkflows.flatMap((wf) => {
+        const targetWorkflowId = workflowIdMap.get(wf.id)
+        return targetWorkflowId
+          ? [{ sourceWorkflowId: wf.id, targetWorkflowId, workflowName: wf.name }]
+          : []
+      }),
+      targetWorkspaceName: childName,
+      userId,
+      now,
+      resolveBlockId: deriveForkBlockId,
+      requestId,
+    })
+
+    // Carry workflow-as-MCP-tool attachments onto the copied server shells: an attachment
+    // copies only when BOTH its server and its workflow were copied. Runs after the workflow
+    // rows exist (FK); the child re-derives each tool's parameter schema on first deploy.
+    await copyForkWorkflowMcpAttachments({
+      tx,
+      serverIdMap: resourceResult.idMap.get('workflow_mcp_server') ?? new Map(),
+      workflowIdMap,
+      now,
+    })
+
+    // A fork carries only DEPLOYED workflows. When the source has none (e.g. it was
+    // itself just forked and never redeployed), seed a default workflow so the child
+    // is a usable workspace rather than a blank one with no workflow at all - the same
+    // starter "New workspace" creates. Any copied resources still land alongside it.
+    if (workflowsCopied === 0) {
+      const defaultWorkflowId = generateId()
+      await insertNewWorkflowRow(tx, {
+        id: defaultWorkflowId,
+        userId,
+        workspaceId: childWorkspaceId,
+        folderId: null,
+        name: 'default-agent',
+        description: 'Your first workflow - start building here!',
+        now,
+      })
+      const { workflowState } = buildDefaultWorkflowArtifacts()
+      await saveWorkflowToNormalizedTables(
+        defaultWorkflowId,
+        workflowState,
+        {
+          /** Actorless: a fork's starter graph is seeded by the platform, not authored. */
+          workspaceId: null,
+          subjectUserId: null,
+        },
+        tx
+      )
+    }
+
+    const seedEntries: ForkMappingUpsert[] = []
+    for (const [sourceWorkflowId, childWorkflowId] of workflowIdMap.entries()) {
+      seedEntries.push({
+        resourceType: 'workflow',
+        parentResourceId: sourceWorkflowId,
+        childResourceId: childWorkflowId,
+      })
+    }
+    seedEntries.push(...resourceResult.mappingEntries)
+    // Copied files map by STORAGE KEY (matching `file-upload` references), from the file-copy
+    // plan - files are copied outside `copyForkResourceContainers`, so their identity rows must
+    // be added here explicitly. Without them a later sync re-offers every fork-copied file as a
+    // copy candidate (and a push would duplicate a referenced file into the parent instead of
+    // resolving it back to the parent's original).
+    for (const [sourceKey, childKey] of fileResult.keyMap) {
+      seedEntries.push({
+        resourceType: 'file',
+        parentResourceId: sourceKey,
+        childResourceId: childKey,
+      })
+    }
+    for (const [sourcePath, childPath] of fileResult.folderPathMap) {
+      seedEntries.push({
+        resourceType: 'file_folder',
+        parentResourceId: sourcePath,
+        childResourceId: childPath,
+      })
+    }
+    await seedEdgeMappings(tx, childWorkspaceId, userId, seedEntries)
+
+    logger.info(`[${requestId}] Created fork ${childWorkspaceId} from ${source.id}`, {
+      workflowsCopied,
+      mappingsSeeded: seedEntries.length,
+    })
+
+    // Serialized in-content reference maps so the post-commit content copy can rewrite
+    // `sim:` links + embedded URLs inside copied skill bodies and markdown file blobs. Maps
+    // become Records to cross the background-job payload boundary.
+    const contentRefMaps = serializeContentRefMaps({
+      workspaceId: { from: source.id, to: childWorkspaceId },
+      fileKeys: fileResult.keyMap,
+      fileIds: fileResult.idMap,
+      workflows: workflowIdMap,
+      folders: folderIdMap,
+      knowledgeBases: resourceResult.idMap.get('knowledge_base'),
+      tables: resourceResult.idMap.get('table'),
+      skills: resourceResult.idMap.get('skill'),
+    })
+
+    const result: CreateForkResult = {
+      workspace: {
+        id: childWorkspaceId,
+        name: childName,
+        ownerId: userId,
+        organizationId: policy.organizationId,
+        workspaceMode: policy.workspaceMode,
+        billedAccountUserId: policy.billedAccountUserId,
+        allowPersonalApiKeys: source.allowPersonalApiKeys,
+        forkedFromWorkspaceId: source.id,
+      },
+      workflowsCopied,
+    }
+    if (admission) {
+      const hasContent = hasForkContentToCopy(resourceResult.contentPlan, fileResult.blobTasks)
+      const report: WorkspaceOperationReport = {
+        operationId: generateId(),
+        workspaceId: admission.workspaceId,
+        requestId: admission.requestId,
+        kind: 'workspace_fork',
+        applied: true,
+        status: hasContent ? 'processing' : 'completed',
+        resourceIds: [childWorkspaceId, ...workflowIdMap.values()],
+        issues: [],
+        forkResult: { ...result },
+        ...(hasContent ? { copyProgress: { status: 'pending', copied: 0, failed: 0 } } : {}),
+      }
+      if (hasContent) {
+        report.backgroundWorkId = await startBackgroundWork(tx, {
+          workspaceId: admission.workspaceId,
+          kind: 'fork_content_copy',
+          supersede: false,
+          message: `Copying resources to "${childName}"`,
+          metadata: { childWorkspaceId, workflowsCopied },
+        })
+        report.contentOutboxEventId = await enqueueDurableForkContent(tx, report, {
+          contentPlan: resourceResult.contentPlan,
+          blobTasks: fileResult.blobTasks,
+          contentRefMaps,
+          statusId: report.backgroundWorkId,
+          requestId: admission.requestId,
+        })
+      }
+      await enqueueOutboxEvent(tx, WORKSPACE_OPERATION_OBSERVE_EVENT, {
+        workspaceId: report.workspaceId,
+        operationId: report.operationId,
+      })
+      await insertWorkspaceOperationReceipt(tx, admission.requestHash, report)
+      result.operation = report
+    }
+    return {
+      result,
+      blobTasks: fileResult.blobTasks,
+      contentPlan: resourceResult.contentPlan,
+      contentRefMaps,
+    }
+  })
+  if ('replay' in transaction && transaction.replay?.forkResult)
+    return { ...transaction.replay.forkResult, operation: transaction.replay, replayed: true }
+  if (!('result' in transaction) || !transaction.result)
+    throw new ForkError('Fork receipt is incomplete', 500)
+  const { result, blobTasks, contentPlan, contentRefMaps } = transaction
+  if (result.operation) return result
+
+  // Bulk content (table rows, KB documents + embeddings) and file blobs are copied
+  // AFTER the fork commits, in the background, so the fork request returns as soon
+  // as the workflows exist and is never blocked on (or timed out by) heavy I/O.
+  // Trigger.dev runs it out-of-process (surviving deploys); without it, runDetached
+  // runs it inline best-effort. Both are batched/bounded internally.
+  const hasContent = hasForkContentToCopy(contentPlan, blobTasks)
+
+  // Record a durable job for EVERY fork (the fork already committed), scoped to the
+  // SOURCE workspace - that's where the fork was initiated and where its Activity tab
+  // lives, so the record survives a reload of the fork modal. When there is heavy
+  // content to copy in the background the row stays `processing` until the runner
+  // finishes it (merging in copied/failed); otherwise the fork is already complete.
+  const forkedName = result.workspace.name
+  // The fork already committed; failing to record the tracking row must not turn it into
+  // a 500. Log and continue without a status row - the background content copy below still
+  // runs (its runner no-ops the status update when statusId is absent).
+  let statusId: string | undefined
+  try {
+    statusId = await startBackgroundWork(db, {
+      workspaceId: source.id,
+      kind: 'fork_content_copy',
+      // Append-only: each fork is a distinct entry in the source workspace's fork history.
+      supersede: false,
+      message: hasContent ? `Copying resources to "${forkedName}"` : `Forked into "${forkedName}"`,
+      metadata: {
+        childWorkspaceId: result.workspace.id,
+        childWorkspaceName: forkedName,
+        actorName: params.actorName,
+        workflowsCopied: result.workflowsCopied,
+        tables: contentPlan.tables.length,
+        knowledgeBases: contentPlan.knowledgeBases.length,
+        files: blobTasks.length,
+        skills: contentPlan.skills.length,
+        documents: contentPlan.documents.length,
+        workflowNames: forkedWorkflowNames,
+        tableNames: forkedResourceNames.tables,
+        knowledgeBaseNames: forkedResourceNames.knowledgeBases,
+        fileNames: blobTasks.map((task) => task.fileName),
+        customToolNames: forkedResourceNames.customTools,
+        skillNames: forkedResourceNames.skills,
+        mcpServerNames: forkedResourceNames.mcpServers,
+        workflowMcpServerNames: forkedResourceNames.workflowMcpServers,
+      },
+    })
+  } catch (error) {
+    logger.error(`[${requestId}] Failed to record fork background-work status`, {
+      childWorkspaceId: result.workspace.id,
+      error: getErrorMessage(error),
+    })
+  }
+
+  if (!hasContent) {
+    if (statusId) {
+      await finishBackgroundWork(db, statusId, {
+        status: 'completed',
+        message: `Forked into "${forkedName}"`,
+        metadata: { copied: 0, failed: 0 },
+      }).catch(() => {})
+    }
+    return result
+  }
+
+  const payload: ForkContentCopyPayload = {
+    contentPlan,
+    blobTasks,
+    contentRefMaps,
+    statusId,
+    requestId,
+  }
+  await scheduleForkContentCopy(payload, { detachedLabel: 'fork-content-copy', requestId })
+
+  return result
+}

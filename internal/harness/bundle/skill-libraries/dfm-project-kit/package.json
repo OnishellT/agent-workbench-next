@@ -1,0 +1,27 @@
+{
+  "name": "dfm-skill-library",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Evidence-first skills for Digital Fulfillment Manager engineering workflows.",
+  "files": [
+    ".atl",
+    ".cursor-plugin",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs",
+    "evals",
+    "licenses",
+    "scripts",
+    "skills"
+  ],
+  "scripts": {
+    "validate": "node scripts/validate-skills.mjs"
+  },
+  "omp": {
+    "name": "DFM Skill Library",
+    "description": "Evidence-first skills for Digital Fulfillment Manager engineering workflows."
+  }
+}

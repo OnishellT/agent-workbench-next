@@ -1,0 +1,26 @@
+{
+  "name": "dfm-skill-library",
+  "displayName": "DFM Skill Library",
+  "version": "0.1.0",
+  "description": "Evidence-first skills for Digital Fulfillment Manager engineering workflows.",
+  "author": {
+    "name": "DFM Engineering"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "dfm",
+    "jira",
+    "pull-requests",
+    "incidents",
+    "qa",
+    "business-decisions"
+  ],
+  "category": "developer-tools",
+  "tags": [
+    "workflow",
+    "review",
+    "verification",
+    "domain-context"
+  ],
+  "skills": "./skills/"
+}

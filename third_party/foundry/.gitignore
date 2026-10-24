@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Local state, data and credentials (never commit a store)
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+.env
+.env.*
+state/
+var/
+backups/
+exports/
+foundry-portable/
+
+# UI toolchain (the built app under foundry_loop/web/ is committed on purpose)
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

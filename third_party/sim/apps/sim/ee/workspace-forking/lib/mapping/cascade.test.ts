@@ -1,0 +1,106 @@
+import { describe, expect, it } from 'vitest'
+import type { DbOrTx } from '@/lib/db/types'
+import type {
+  ForkReference,
+  ForkReferenceResolver,
+} from '@/lib/workflows/references/remap-references'
+import { detectForkCascadeReferences } from '@/ee/workspace-forking/lib/mapping/cascade'
+
+/** Executor that returns the queued result arrays in the order queries are issued. */
+function queuedExecutor(results: unknown[][]): DbOrTx {
+  let index = 0
+  const builder = {
+    from: () => builder,
+    innerJoin: () => builder,
+    where: () => Promise.resolve(results[index++] ?? []),
+  }
+  return { select: () => builder } as unknown as DbOrTx
+}
+
+function ref(kind: ForkReference['kind'], sourceId: string): ForkReference {
+  return { kind, sourceId, subBlockKey: 'tools', required: false }
+}
+
+const resolveNone: ForkReferenceResolver = () => null
+
+describe('detectForkCascadeReferences', () => {
+  it('surfaces env keys from custom tool code as required unmapped env-var refs', async () => {
+    const result = await detectForkCascadeReferences({
+      executor: queuedExecutor([[{ id: 't1', title: 'Weather', code: 'fetch(`{{API_KEY}}`)' }]]),
+      sourceWorkspaceId: 'ws',
+      references: [ref('custom-tool', 't1')],
+      resolve: resolveNone,
+    })
+    expect(result.references).toHaveLength(1)
+    expect(result.references[0]).toMatchObject({
+      kind: 'env-var',
+      sourceId: 'API_KEY',
+      required: true,
+    })
+    expect(result.unmapped).toHaveLength(1)
+  })
+
+  it('extracts env keys from MCP url/headers and flags oauth servers for re-auth', async () => {
+    const result = await detectForkCascadeReferences({
+      executor: queuedExecutor([
+        [
+          {
+            id: 'mcp-1',
+            name: 'Server',
+            url: 'https://x/{{HOST_KEY}}',
+            headers: { Authorization: '{{TOKEN}}' },
+            authType: 'headers',
+          },
+          { id: 'mcp-2', name: 'OAuth Server', url: 'https://y', headers: {}, authType: 'oauth' },
+        ],
+      ]),
+      sourceWorkspaceId: 'ws',
+      references: [ref('mcp-server', 'mcp-1'), ref('mcp-server', 'mcp-2')],
+      resolve: resolveNone,
+    })
+    const envIds = result.references
+      .filter((r) => r.kind === 'env-var')
+      .map((r) => r.sourceId)
+      .sort()
+    expect(envIds).toEqual(['HOST_KEY', 'TOKEN'])
+    expect(result.mcpReauthServerIds).toEqual(['mcp-2'])
+  })
+
+  it('flags literal MCP header values as inline secrets (not env)', async () => {
+    const result = await detectForkCascadeReferences({
+      executor: queuedExecutor([
+        [
+          {
+            id: 'mcp-1',
+            name: 'Server',
+            url: 'https://x',
+            headers: { Authorization: 'sk-literal' },
+            authType: 'headers',
+          },
+        ],
+      ]),
+      sourceWorkspaceId: 'ws',
+      references: [ref('mcp-server', 'mcp-1')],
+      resolve: resolveNone,
+    })
+    expect(result.references).toHaveLength(0)
+    expect(result.inlineSecretSources).toHaveLength(1)
+  })
+
+  it('surfaces KB connector credentials as required credential refs', async () => {
+    const result = await detectForkCascadeReferences({
+      executor: queuedExecutor([
+        [{ id: 'kc-1', knowledgeBaseId: 'kb-1', credentialId: 'cred-9', encryptedApiKey: null }],
+      ]),
+      sourceWorkspaceId: 'ws',
+      references: [ref('knowledge-base', 'kb-1')],
+      resolve: resolveNone,
+    })
+    expect(result.references).toHaveLength(1)
+    expect(result.references[0]).toMatchObject({
+      kind: 'credential',
+      sourceId: 'cred-9',
+      required: true,
+    })
+  })
+})
