@@ -1,0 +1,16 @@
+# Secret scan configuration: the default rules, plus an allowlist for text that is
+# deliberately secret-shaped but fake (redaction tests and vendored upstream tests).
+title = "agent-workbench gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials in tests of redaction and credential handling"
+paths = [
+  '''(^|/)[^/]*_test\.go$''',
+  '''(^|/)[^/]*\.test\.(ts|tsx|cjs|mjs|js)$''',
+  '''^third_party/magpie/''',
+  '''^third_party/sim/''',
+  '''^third_party/foundry/tests/''',
+]

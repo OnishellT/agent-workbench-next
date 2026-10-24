@@ -1,0 +1,27 @@
+version: 2
+# Vendored upstream trees (third_party/sim, third_party/magpie) are updated by pinning a new
+# upstream release (see their WORKBENCH.md), not by Dependabot.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: bun
+    directories: [/web, /third_party/foundry/ui, /adapters/pi]
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      js-minor-patch:
+        update-types: [minor, patch]

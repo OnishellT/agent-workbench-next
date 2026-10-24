@@ -1,0 +1,263 @@
+name: CI
+
+# Every check a pull request must pass. One required status check, `ci-ok`, aggregates them,
+# so branch rules never need updating when a job is added. Pull request code runs with a
+# read-only token and no secrets.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  GOAMD64: v1
+  GOTOOLCHAIN: local
+
+jobs:
+  web:
+    name: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Install
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: web
+        run: bun run typecheck
+      - name: Unit tests
+        working-directory: web
+        run: bun test tests/unit
+      - name: Build
+        working-directory: web
+        run: bun run build
+      # The Go build embeds web/dist, so the Go jobs take it from here.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 3
+          if-no-files-found: error
+
+  go:
+    name: go
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: web/dist
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal third_party/foundry web)
+          if [ -n "$unformatted" ]; then echo "::error::gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet -tags nogui ./cmd/... ./internal/... ./web/...
+      # Policy (and why ST1005 is off) lives in staticcheck.conf.
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags nogui ./cmd/... ./internal/... ./web/...
+      - name: Tests
+        run: go test -tags nogui -count=1 ./cmd/... ./internal/... ./web/...
+      - name: Docker packaging guard
+        run: python3 scripts/check_docker_web_output.py
+      - name: Release binaries
+        run: make binaries
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries
+          path: |
+            dist/workbench
+            dist/magpie
+          retention-days: 3
+          if-no-files-found: error
+
+  foundry-python:
+    name: foundry (python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Runtime is standard library only
+        working-directory: third_party/foundry
+        run: python -c "import foundry_loop, foundry_loop.app, foundry_loop.miner, foundry_loop.publish"
+      - name: Lint (pyflakes)
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install --quiet ruff==0.16.10
+          ruff check --select F third_party/foundry/foundry_loop third_party/foundry/tests --exclude third_party/foundry/foundry_loop/vendor
+      - name: Tests
+        working-directory: third_party/foundry
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests
+
+  foundry-ui:
+    name: foundry-ui
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Install
+        working-directory: third_party/foundry/ui
+        run: bun install --frozen-lockfile
+      - name: Typecheck and tests (translation engine and string coverage)
+        working-directory: third_party/foundry/ui
+        run: |
+          bun run typecheck
+          bun test tests
+      # The Go binary embeds foundry_loop/web, which is committed: it must be the build of ui/.
+      - name: Committed bundle matches the sources
+        working-directory: third_party/foundry/ui
+        run: |
+          bun run build
+          if ! git diff --exit-code --stat -- ../foundry_loop/web; then
+            echo "::error::third_party/foundry/foundry_loop/web is stale: run 'make foundry-ui' and commit the result"
+            exit 1
+          fi
+
+  tooling:
+    name: tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Reviewer and review-gate tests
+        run: bun test ./scripts/review ./scripts/review-gate.test.ts
+      - name: Pi adapter tests
+        working-directory: adapters/pi
+        run: bun test
+      - name: Shell scripts
+        run: shellcheck --severity=warning scripts/*.sh scripts/ci/*.sh
+
+  image:
+    name: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: agent-workbench:ci
+          build-args: VERSION=ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Starts the real image and checks what a server install depends on: the dashboard
+      # answers, and Foundry (Python inside the image) starts behind the session.
+      - name: Smoke test
+        run: scripts/ci/smoke-image.sh agent-workbench:ci
+
+  e2e:
+    name: e2e
+    needs: go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: dist
+      - name: Install web dependencies and the browser
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+      - name: Start a trial instance
+        run: scripts/ci/start-trial.sh "$RUNNER_TEMP/trial"
+      - name: Browser specs
+        working-directory: web
+        env:
+          E2E_BASE_URL: http://127.0.0.1:19177
+          E2E_ACCESS_TOKEN_FILE: ${{ runner.temp }}/trial/state/access.token
+          E2E_PROJECT_DIR: ${{ runner.temp }}/trial/project
+        run: >
+          bunx playwright test
+          foundry-release foundry-example-release foundry-language-release
+          shell-navigation-release shell-palette shell-contracts section-boundary-release
+          shell-theme-release shell-notices-release shell-settings
+      - name: Trial instance log
+        if: failure()
+        run: cat "$RUNNER_TEMP/trial/workbench.log" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/test-results
+            web/tests/e2e/report
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The single required check: green only when every job above passed (a skipped or
+  # cancelled dependency is a failure, never a pass).
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [web, go, foundry-python, foundry-ui, tooling, image, e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: All jobs succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null

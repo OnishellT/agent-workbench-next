@@ -9,7 +9,7 @@ MAGPIE_VERSION ?= 0.1.1265
 # Go test temp files: tmpfs is ~100x faster than the direnv TMPDIR on disk (51s vs 0.02s).
 TMPDIR_TEST ?= /tmp
 
-.PHONY: frontend foundry-ui foundry-test build binaries test check
+.PHONY: frontend foundry-ui foundry-test build binaries test lint check review pr-status
 
 frontend:
 	cd web && $(BUN) run build
@@ -36,7 +36,23 @@ binaries:
 test: frontend
 	TMPDIR=$(TMPDIR_TEST) CGO_ENABLED=0 GOAMD64=v1 $(GO) test -tags nogui ./cmd/... ./internal/... ./web/...
 
-check: test foundry-test
+# The same static checks CI runs on the Go code (ST1005, capitalised error text, is deliberate).
+lint:
+	@unformatted="$$(gofmt -l cmd internal third_party/foundry web)"; \
+	  if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
+	CGO_ENABLED=0 GOAMD64=v1 $(GO) vet -tags nogui ./cmd/... ./internal/... ./web/...
+	CGO_ENABLED=0 GOAMD64=v1 $(GO) run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags nogui ./cmd/... ./internal/... ./web/...
+
+# Local pull request reviewer (see CONTRIBUTING.md#review-gate): make review PR=123 [ARGS=--dry-run]
+review:
+	@test -n "$(PR)" || { echo "usage: make review PR=<number> [ARGS=--dry-run]"; exit 2; }
+	$(BUN) scripts/review-pr.ts $(PR) $(ARGS)
+
+pr-status:
+	@test -n "$(PR)" || { echo "usage: make pr-status PR=<number>"; exit 2; }
+	sh scripts/pr-status.sh $(PR)
+
+check: lint test foundry-test
 	cd web && $(BUN) test tests/unit
 	python3 scripts/check_docker_web_output.py
 	cd web && $(BUN) run typecheck
