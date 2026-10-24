@@ -126,13 +126,39 @@ export function findSecretLeak(text: string, secrets: readonly string[]): boolea
   return secrets.some((secret) => secret.length >= 8 && text.includes(secret));
 }
 
+// Removes every occurrence of a literal token.
+function removeAll(text: string, token: string): string {
+  let out = "";
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(token, from);
+    if (at === -1) return out + text.slice(from);
+    out += text.slice(from, at);
+    from = at + token.length;
+  }
+}
+
+// Removes the `<!-- ... -->` spans of one pass, left to right (an unclosed opener keeps its text).
+function removeCommentSpans(text: string): string {
+  let out = "";
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf("<!--", from);
+    const close = open === -1 ? -1 : text.indexOf("-->", open + 4);
+    if (close === -1) return out + text.slice(from);
+    out += text.slice(from, open);
+    from = close + 3;
+  }
+}
+
 // Removes HTML comments, then any delimiter left over, until nothing changes. A single pass can
 // rebuild a comment from its own remains (`<<!---->!-- ... -->`), and a rebuilt review marker must
-// never reach the posted text or the model's context.
+// never reach the posted text or the model's context. Plain string search, no regular expression:
+// every changing pass shortens the text, so the loop ends, and the result holds neither delimiter.
 export function stripHtmlComments(text: string): string {
   let current = text;
   for (;;) {
-    const next = current.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--/g, "").replace(/-->/g, "");
+    const next = removeAll(removeAll(removeCommentSpans(current), "<!--"), "-->");
     if (next === current) return next;
     current = next;
   }

@@ -7,10 +7,16 @@ useDefault = true
 
 [allowlist]
 description = "Fake credentials in tests of redaction and credential handling"
+# First-party test files are listed one by one: a real secret in any other test file is still
+# found, and a new fixture that looks like a secret needs a visible line here. The vendored
+# upstream trees below hold over a hundred fake values their owners already scan, so they stay
+# whole-path exemptions.
 paths = [
-  '''(^|/)[^/]*_test\.go$''',
-  '''(^|/)[^/]*\.test\.(ts|tsx|cjs|mjs|js)$''',
+  '''^internal/app/native_sites_test\.go$''',
+  '''^internal/foundry/redact_prefilter_test\.go$''',
+  '''^internal/hosts/dependencies_test\.go$''',
+  '''^internal/models/native_attach_test\.go$''',
+  '''^third_party/foundry/tests/test_native_normalization\.py$''',
   '''^third_party/magpie/''',
   '''^third_party/sim/''',
-  '''^third_party/foundry/tests/''',
 ]

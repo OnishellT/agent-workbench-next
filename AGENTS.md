@@ -106,7 +106,7 @@ Agent configuration (Magpie), Connections (incl. devices), Settings.
 ## CI and review
 
 - Pull requests run `.github/workflows/ci.yml` (required check `ci-ok`) and `security.yml`
-  (`security-ok`); `make check` is the local equivalent. `main` is protected (`.github/rulesets/main.json`).
+  (`security-ok`); `make check` is a subset (gofmt, vet, staticcheck, Go/web/Foundry tests, typecheck, packaging guard; not the tooling tests, image smoke test or browser specs). `main` is protected (`.github/rulesets/main.json`).
 - Merging needs the local reviewer: `make review PR=<n>` (pi, read-only, confidence 1-5) on the final
   commit with confidence 4 or 5 and no actionable findings; `review-gate` enforces it. The reviewer's
   rules are read from the base branch (`.github/review.json`, `.github/copilot-instructions.md`,

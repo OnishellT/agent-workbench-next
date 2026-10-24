@@ -38,7 +38,7 @@ Every pull request runs these; the required checks are `ci-ok`, `security-ok` an
 | `e2e` | real-browser specs against a freshly built instance |
 | Security workflow | govulncheck, secret scan, dependency review, CodeQL |
 
-Run the same checks locally with `make check`. Specs that need fixtures from a real machine (SSH hosts,
+`make check` is a subset of these: it covers lint, Go, web and Foundry tests, typecheck and the packaging guard. The tooling tests (`bun test ./scripts/review ./scripts/review-gate.test.ts`), the image smoke test (`scripts/ci/smoke-image.sh`) and the browser specs (`scripts/ci/start-trial.sh` plus `bunx playwright test`) run only in CI unless you run them yourself. Specs that need fixtures from a real machine (SSH hosts,
 a signed-in Magpie) are not part of CI; run them against a trial instance when you touch that code.
 
 ## Review gate

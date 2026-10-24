@@ -605,9 +605,13 @@ async function main() {
     const ignore = parseIgnorePatterns(config.ignorePatterns ?? "");
     // Changed paths come from the diff: `gh pr view --json files` stops at 100 entries.
     const fullDiff = await sh(["gh", "pr", "diff", String(pr), "-R", data.repo]);
-    const changed = splitDiffByFile(fullDiff).map((file) => file.path);
+    const files = splitDiffByFile(fullDiff);
+    const changed = files.map((file) => file.path);
     const paths = unignoredPaths(changed, ignore);
-    if (reviewablePaths(changed, ignore).length === 0) {
+    // Like the review-gate workflow, a rename counts both of its paths: moving a file out of
+    // Markdown or into an ignored path still needs a review (and the marker that clears the gate).
+    const gated = files.flatMap((file) => [file.path, ...(file.previousPath ? [file.previousPath] : [])]);
+    if (reviewablePaths(gated, ignore).length === 0) {
       console.log(`PR #${pr} changes only Markdown or ignored files: no review needed.`);
       return;
     }

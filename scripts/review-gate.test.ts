@@ -39,6 +39,7 @@ interface Fixture {
   reviews?: ReturnType<typeof review>[];
   /** false: the base branch has no .github/review.json, so the fetch fails. */
   config?: boolean;
+  ignorePatterns?: string;
 }
 
 let dir: string;
@@ -71,7 +72,9 @@ function run(fixture: Fixture): { ok: boolean; output: string } {
   );
   writeFileSync(
     join(dir, "review.json"),
-    JSON.stringify({ ignorePatterns: "web/bun.lock\n**/generated.d.ts\ndocs/assets/**" }),
+    JSON.stringify({
+      ignorePatterns: fixture.ignorePatterns ?? "web/bun.lock\n**/generated.d.ts\ndocs/assets/**",
+    }),
   );
   if (fixture.config === false) rmSync(join(dir, "review.json"));
   writeFileSync(join(dir, "reviews.json"), JSON.stringify(fixture.reviews ?? []));
@@ -118,6 +121,14 @@ describe("review gate", () => {
     expect(run({ files: [{ filename: "docs/assets/a.png" }, { filename: "internal/a.go" }] }).ok).toBe(
       false,
     );
+  });
+
+  test("rejects ignore globs beyond literals, * and ** instead of reading them as literals", () => {
+    for (const ignorePatterns of ["docs/a?.png", "docs/[ab].png", "docs/*.{png,svg}"]) {
+      const result = run({ ignorePatterns, files: [{ filename: "docs/ab.png" }] });
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("may only use literals");
+    }
   });
 
   test("still requires a review when .github/review.json cannot be fetched", () => {

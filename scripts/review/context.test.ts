@@ -63,3 +63,10 @@ test("finds linked issues in the PR body", () => {
   expect(linkedIssues("Closes #97\n\nalso fixes #12 and Closes #97")).toEqual([97, 12]);
   expect(linkedIssues("no links")).toEqual([]);
 });
+
+test("ignorePatterns rejects globs the review gate does not implement", () => {
+  for (const glob of ["a?.ts", "src/[ab].ts", "src/*.{ts,js}"]) {
+    expect(() => parseIgnorePatterns(`web/bun.lock\n${glob}`)).toThrow("only literals");
+  }
+  expect(parseIgnorePatterns("**/*.png\nthird_party/**")).toEqual(["**/*.png", "third_party/**"]);
+});

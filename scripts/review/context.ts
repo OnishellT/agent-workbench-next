@@ -28,12 +28,19 @@ export function parseApplyTo(content: string): string[] {
     .filter((glob) => glob.length > 0);
 }
 
-// `ignorePatterns` of .github/review.json is a newline-separated glob list.
+// `ignorePatterns` of .github/review.json is a newline-separated glob list. Only literals, `*` and
+// `**` are allowed: the review-gate workflow implements that subset, and a richer glob would let
+// the reviewer skip a PR that the gate still blocks.
 export function parseIgnorePatterns(ignorePatterns: string): string[] {
-  return ignorePatterns
+  const globs = ignorePatterns
     .split("\n")
     .map((glob) => glob.trim())
     .filter((glob) => glob.length > 0);
+  const unsupported = globs.find((glob) => /[?[\]{}]/.test(glob));
+  if (unsupported !== undefined) {
+    throw new Error(`ignorePatterns supports only literals, * and **: ${unsupported}`);
+  }
+  return globs;
 }
 
 // Domain skills (.pi/skills/<name>/SKILL.md) that apply to the changed paths.

@@ -48,6 +48,12 @@ jobs:
           # Markdown is not exempt.
           ignore=$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/review.json?ref=$(jq -r .base.sha <<<"$pr")" 2>/dev/null \
             | jq -R -s 'try (fromjson | .ignorePatterns // "") catch "" | split("\n") | map(select(length > 0))') || ignore='[]'
+          # The gate understands literals, `*` and `**` only (the reviewer's Bun.Glob also reads
+          # `?`, `[...]` and `{a,b}`): reject the rest instead of letting the two disagree.
+          if jq -e 'any(.[]; test("[?\\[\\]{}]"))' <<<"$ignore" >/dev/null; then
+            echo "::error::.github/review.json ignorePatterns may only use literals, * and ** (found ?, [], or {})."
+            exit 1
+          fi
           other=$(api "pulls/$PR/files" | jq --argjson ignore "$ignore" '
             def rx: gsub("(?<c>[.+?()\\[\\]{}|^$])"; "\\\(.c)")
               | gsub("\\*\\*/"; "\u0001") | gsub("\\*\\*"; "\u0002") | gsub("\\*"; "\u0003")

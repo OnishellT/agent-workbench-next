@@ -49,3 +49,26 @@ test("lines between hunks are not commentable", () => {
 test("splits a diff into one chunk per file by post-image path", () => {
   expect(splitDiffByFile(diff).map((file) => file.path)).toEqual(["src/a.ts", "old.ts", "new.ts"]);
 });
+
+test("a rename keeps its pre-image path next to the post-image one", () => {
+  const renamed = `diff --git a/internal/a.go b/docs/a.md
+similarity index 90%
+rename from internal/a.go
+rename to docs/a.md
+--- a/internal/a.go
++++ b/docs/a.md
+@@ -1 +1 @@
+-x
++y
+diff --git a/plain.ts b/plain.ts
+--- a/plain.ts
++++ b/plain.ts
+@@ -1 +1 @@
+-a
++b
+`;
+  expect(splitDiffByFile(renamed).map((f) => [f.path, f.previousPath])).toEqual([
+    ["docs/a.md", "internal/a.go"],
+    ["plain.ts", undefined],
+  ]);
+});

@@ -2,6 +2,8 @@
 
 export interface FileDiff {
   path: string;
+  // Pre-image path of a rename (the review gate counts it too).
+  previousPath?: string;
   text: string;
 }
 
@@ -13,7 +15,8 @@ export function splitDiffByFile(diff: string): FileDiff[] {
     const added = /^\+\+\+ (?:b\/)?(.+?)\t?$/m.exec(text)?.[1];
     const header = /^diff --git a\/(.+?) b\/(.+)$/m.exec(text);
     const path = added && added !== "/dev/null" ? added : (header?.[2] ?? header?.[1] ?? "");
-    return { path, text };
+    const previousPath = /^rename from (.+)$/m.exec(text)?.[1];
+    return previousPath === undefined ? { path, text } : { path, previousPath, text };
   });
 }
 

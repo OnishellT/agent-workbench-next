@@ -33,7 +33,7 @@ topology: [docs/operations.md](docs/operations.md).
 
 ## Develop
 
-`nix develop` provides the pinned toolchain. `make check` runs what CI runs. Architecture and the rules
+`nix develop` provides the pinned toolchain. `make check` runs the core of what CI runs (lint, Go, web and Foundry tests; not the tooling tests, image smoke test or browser specs). Architecture and the rules
 agents and people follow: [AGENTS.md](AGENTS.md); scope: [plan.md](plan.md); how to contribute and the
 review gate: [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities as described in
 [SECURITY.md](SECURITY.md).

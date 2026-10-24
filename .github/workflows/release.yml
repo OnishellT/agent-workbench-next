@@ -3,7 +3,7 @@ name: Release
 # A version tag (v*) builds the static binaries and the runtime image, publishes the image to
 # GitHub Container Registry with build provenance, and creates a GitHub release with the
 # binaries and their checksums. Run it by hand (workflow_dispatch) to rehearse the build
-# without publishing anything.
+# without publishing anything (also when it is started on a tag: only a tag push publishes).
 on:
   push:
     tags: ["v*"]
@@ -68,6 +68,8 @@ jobs:
 
   image:
     name: image
+    # Nothing is pushed unless the tests and the binaries passed.
+    needs: binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -75,15 +77,17 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    env:
-      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Registry names are lowercase; the repository owner is not (the metadata action lowercases
+      # the tags it builds, so the smoke test and the attestation must use the same name).
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -91,36 +95,39 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false # the raw rule below decides: never for a prerelease (v1.2.3-rc1)
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
-            type=raw,value=rehearsal,enable=${{ github.ref_type != 'tag' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+            type=raw,value=rehearsal,enable=${{ github.event_name != 'push' }}
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: ${{ github.ref_type == 'tag' }}
-          load: ${{ github.ref_type != 'tag' }}
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name != 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test the image that is about to ship
-        if: github.ref_type != 'tag'
+        if: github.event_name != 'push'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
         run: scripts/ci/smoke-image.sh "${IMAGE}:rehearsal"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         with:
-          subject-name: ${{ env.IMAGE }}
+          subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
   release:
     name: github release
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push'
     needs: [binaries, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
