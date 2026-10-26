@@ -7,7 +7,7 @@ COPY web/ ./
 COPY NOTICE.md GO-NOTICES.txt /src/
 RUN bun run build
 
-FROM golang:1.26.10-bookworm AS binary-build
+FROM golang:1.27.3-bookworm AS binary-build
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 GOTOOLCHAIN=local
 # Sin este argumento la imagen reporta «development», que no identifica ningún release.
 ARG VERSION=development
